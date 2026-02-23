@@ -645,7 +645,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             this.launchersBox.manager = manager;
             this.myactor.set_layout_manager(manager);
             this.myactor.min_width = 0;
-            this.myactor.remove_style_class_name('vertical');
 
             // Re-add the allocation listener (disconnect first to avoid duplicates)
             this.signals.disconnect('notify::allocation', this.actor);
@@ -654,7 +653,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             let manager = new Clutter.BoxLayout({ orientation: Clutter.Orientation.VERTICAL });
             this.launchersBox.manager = manager;
             this.myactor.set_layout_manager(manager);
-            this.myactor.add_style_class_name('vertical');
 
             // Remove allocation listener and width constraint for vertical
             this.signals.disconnect('notify::allocation', this.actor);
