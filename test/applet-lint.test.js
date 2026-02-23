@@ -1,0 +1,198 @@
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+const appletSource = fs.readFileSync(path.join(ROOT, 'applet.js'), 'utf8');
+const metadata = JSON.parse(fs.readFileSync(path.join(ROOT, 'metadata.json'), 'utf8'));
+
+describe('applet.js safety checks', () => {
+    describe('cleanup on removal', () => {
+        it('has on_applet_removed_from_panel method', () => {
+            assert.ok(
+                appletSource.includes('on_applet_removed_from_panel'),
+                'missing on_applet_removed_from_panel method'
+            );
+        });
+
+        it('destroys launchers in on_applet_removed_from_panel', () => {
+            const methodMatch = appletSource.match(
+                /on_applet_removed_from_panel\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find on_applet_removed_from_panel body');
+            const body = methodMatch[1];
+
+            assert.ok(
+                body.includes('.destroy()'),
+                'on_applet_removed_from_panel must call .destroy() on launchers'
+            );
+            assert.ok(
+                body.includes('this._launchers'),
+                'on_applet_removed_from_panel must reference this._launchers'
+            );
+        });
+
+        it('calls signals.disconnectAllSignals in cleanup', () => {
+            const methodMatch = appletSource.match(
+                /on_applet_removed_from_panel\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('disconnectAllSignals'),
+                'on_applet_removed_from_panel must call signals.disconnectAllSignals()'
+            );
+        });
+    });
+
+    describe('settings UUID', () => {
+        it('uses the correct UUID from metadata.json', () => {
+            const uuid = metadata.uuid;
+            const settingsPattern = new RegExp(
+                `new Settings\\.AppletSettings\\(this,\\s*"${uuid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`
+            );
+            assert.ok(
+                settingsPattern.test(appletSource),
+                `applet.js must use Settings UUID "${uuid}" matching metadata.json`
+            );
+        });
+    });
+
+    describe('FlowLayout container', () => {
+        it('uses Clutter.FlowLayout for horizontal panels', () => {
+            assert.ok(
+                appletSource.includes('Clutter.FlowLayout'),
+                'must use Clutter.FlowLayout'
+            );
+        });
+
+        it('uses Clutter.Actor with layout_manager (not St.BoxLayout)', () => {
+            // The main container should be a Clutter.Actor with layout_manager, not St.BoxLayout
+            assert.ok(
+                appletSource.includes('new Clutter.Actor'),
+                'must use Clutter.Actor for layout container'
+            );
+        });
+
+        it('sets min_width = 0 on manager_container for horizontal panels', () => {
+            assert.ok(
+                appletSource.includes('min_width = 0'),
+                'must set min_width = 0 to prevent panel zone squeeze'
+            );
+        });
+    });
+
+    describe('allocation listener', () => {
+        it('has _onAllocationChanged method', () => {
+            assert.ok(
+                appletSource.includes('_onAllocationChanged'),
+                'must have _onAllocationChanged method'
+            );
+        });
+
+        it('uses get_allocation_box in _onAllocationChanged', () => {
+            const methodMatch = appletSource.match(
+                /_onAllocationChanged\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _onAllocationChanged body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('get_allocation_box'),
+                '_onAllocationChanged must use get_allocation_box() for width'
+            );
+        });
+
+        it('has re-entrancy guard in _onAllocationChanged', () => {
+            const methodMatch = appletSource.match(
+                /_onAllocationChanged\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_inAllocationUpdate'),
+                '_onAllocationChanged must use _inAllocationUpdate re-entrancy guard'
+            );
+        });
+
+        it('re-asserts min_width = 0 in _onAllocationChanged', () => {
+            const methodMatch = appletSource.match(
+                /_onAllocationChanged\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('min_width = 0'),
+                '_onAllocationChanged must re-assert min_width = 0'
+            );
+        });
+    });
+
+    describe('orientation handling', () => {
+        it('has on_orientation_changed method', () => {
+            assert.ok(
+                appletSource.includes('on_orientation_changed'),
+                'must have on_orientation_changed'
+            );
+        });
+
+        it('creates FlowLayout and sets layout_manager in on_orientation_changed', () => {
+            // After on_orientation_changed, the source should show FlowLayout creation
+            // and set_layout_manager call in the same method
+            const afterMethod = appletSource.substring(
+                appletSource.indexOf('on_orientation_changed')
+            );
+            // Grab up to the next method definition (4-space indented identifier followed by ()
+            const nextMethod = afterMethod.indexOf('\n    _reload');
+            const body = nextMethod > 0 ? afterMethod.substring(0, nextMethod) : afterMethod;
+            assert.ok(
+                body.includes('FlowLayout'),
+                'on_orientation_changed must create FlowLayout for horizontal'
+            );
+            assert.ok(
+                body.includes('set_layout_manager'),
+                'on_orientation_changed must call set_layout_manager'
+            );
+        });
+    });
+
+    describe('icon sizing', () => {
+        it('imports helpers.js', () => {
+            assert.ok(
+                appletSource.includes("require('./helpers')") || appletSource.includes('require("./helpers")'),
+                'must import helpers.js'
+            );
+        });
+
+        it('calls calcLauncherIconSize', () => {
+            assert.ok(
+                appletSource.includes('calcLauncherIconSize'),
+                'must use calcLauncherIconSize from helpers'
+            );
+        });
+    });
+
+    describe('DND', () => {
+        it('only accepts LauncherDraggable sources (no isDraggableApp)', () => {
+            // handleDragOver should not accept isDraggableApp
+            const methodMatch = appletSource.match(
+                /handleDragOver\s*\([\s\S]*?\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find handleDragOver body');
+            const body = methodMatch[1];
+            assert.ok(
+                !body.includes('isDraggableApp'),
+                'handleDragOver must not accept isDraggableApp (internal reorder only)'
+            );
+        });
+    });
+
+    describe('acceptNewLauncher', () => {
+        it('has acceptNewLauncher method for panel role', () => {
+            assert.ok(
+                appletSource.includes('acceptNewLauncher'),
+                'must have acceptNewLauncher for panellauncher role'
+            );
+        });
+    });
+});
