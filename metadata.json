@@ -1,0 +1,8 @@
+{
+ "uuid": "multirow-panel-launchers@cinnamon",
+ "name": "Multi-Row Panel Launchers",
+ "description": "Panel launcher applet that wraps icons into multiple rows using FlowLayout",
+ "icon": "cs-applets",
+ "role": "panellauncher",
+ "max-instances": -1
+}

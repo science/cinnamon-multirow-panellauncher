@@ -1,0 +1,41 @@
+{
+  "section1": {
+    "type": "section",
+    "description": "Behavior"
+  },
+  "launcherList": {
+    "type": "generic",
+    "default": ["firefox.desktop", "org.gnome.Terminal.desktop", "nemo.desktop"]
+  },
+  "allow-dragging": {
+    "type": "switch",
+    "default": true,
+    "description": "Allow dragging of launchers"
+  },
+  "section-multirow": {
+    "type": "section",
+    "description": "Multi-Row Layout"
+  },
+  "max-rows": {
+    "type": "spinbutton",
+    "default": 2,
+    "min": 1,
+    "max": 4,
+    "step": 1,
+    "units": "rows",
+    "description": "Maximum rows for launcher icons (1 = single row)"
+  },
+  "section-appearance": {
+    "type": "section",
+    "description": "Appearance"
+  },
+  "icon-size-override": {
+    "type": "spinbutton",
+    "default": 0,
+    "min": 0,
+    "max": 64,
+    "step": 2,
+    "units": "pixels",
+    "description": "Icon size override (0 = auto-scale to row height)"
+  }
+}

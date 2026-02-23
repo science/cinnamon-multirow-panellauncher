@@ -1,0 +1,15 @@
+{
+  "name": "cinnamon-multirow-panellauncher",
+  "version": "1.0.0",
+  "description": "Multi-row panel launcher applet for Cinnamon desktop",
+  "main": "applet.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
