@@ -43,7 +43,10 @@ Right-click the applet → Configure:
 |---------|---------|-------------|
 | Maximum rows | 2 | Number of rows for launcher icons (1–4) |
 | Icon size override | 0 (auto) | Manual icon size in pixels (0 = auto-scale) |
+| Max width | 0 (no limit) | Maximum width for launcher area in pixels |
 | Allow dragging | On | Enable drag-and-drop reordering |
+
+The applet's runtime config (launcher list + settings) lives at `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/40.json` and is tracked by yadm for dotfile backup.
 
 ## Uninstallation
 
@@ -58,7 +61,7 @@ Safe to run from a TTY if Cinnamon has crashed. Removes the applet from the enab
 ### Running tests
 
 ```bash
-npm test   # 77 tests across 4 test files
+npm test   # 112 tests across 4 test files
 ```
 
 ### Project structure
