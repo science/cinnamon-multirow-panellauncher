@@ -1,7 +1,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-    calcLauncherIconSize, calcNeededRows, calcGridDropIndex
+    calcLauncherIconSize, calcNeededRows, calcGridDropIndex, calcContainerColumns,
+    calcContainerWidth
 } = require('../helpers');
 
 describe('calcLauncherIconSize', () => {
@@ -100,6 +101,68 @@ describe('calcNeededRows', () => {
     });
 });
 
+describe('calcContainerColumns', () => {
+    // Core fix: items fill left-to-right before wrapping to a new row.
+    // With few items (count <= maxRows), everything stays in one row.
+
+    it('returns 0 for 0 items', () => {
+        assert.equal(calcContainerColumns(0, 2), 0);
+    });
+
+    it('1 item, maxRows=2 → 1 column (single row)', () => {
+        assert.equal(calcContainerColumns(1, 2), 1);
+    });
+
+    it('2 items, maxRows=2 → 2 columns (single row, not stacked)', () => {
+        // This is the critical fix: 2 items should NOT stack into 1 column
+        assert.equal(calcContainerColumns(2, 2), 2);
+    });
+
+    it('3 items, maxRows=2 → 2 columns (2+1 layout)', () => {
+        assert.equal(calcContainerColumns(3, 2), 2);
+    });
+
+    it('4 items, maxRows=2 → 2 columns (2+2 layout)', () => {
+        assert.equal(calcContainerColumns(4, 2), 2);
+    });
+
+    it('5 items, maxRows=2 → 3 columns (3+2 layout)', () => {
+        assert.equal(calcContainerColumns(5, 2), 3);
+    });
+
+    it('10 items, maxRows=2 → 5 columns (5+5)', () => {
+        assert.equal(calcContainerColumns(10, 2), 5);
+    });
+
+    it('1 item, maxRows=1 → 1 column', () => {
+        assert.equal(calcContainerColumns(1, 1), 1);
+    });
+
+    it('3 items, maxRows=1 → 3 columns (all in single row)', () => {
+        assert.equal(calcContainerColumns(3, 1), 3);
+    });
+
+    it('3 items, maxRows=3 → 3 columns (all in one row, not 1+1+1)', () => {
+        assert.equal(calcContainerColumns(3, 3), 3);
+    });
+
+    it('4 items, maxRows=3 → 2 columns (2+2 in 2 rows)', () => {
+        assert.equal(calcContainerColumns(4, 3), 2);
+    });
+
+    it('7 items, maxRows=3 → 3 columns (3+3+1)', () => {
+        assert.equal(calcContainerColumns(7, 3), 3);
+    });
+
+    it('returns 0 for invalid maxRows', () => {
+        assert.equal(calcContainerColumns(5, 0), 0);
+    });
+
+    it('returns 0 for negative count', () => {
+        assert.equal(calcContainerColumns(-1, 2), 0);
+    });
+});
+
 describe('calcGridDropIndex', () => {
     it('returns 0 for top-left corner', () => {
         assert.equal(calcGridDropIndex(5, 5, 30, 30, 10, 20), 0);
@@ -144,5 +207,79 @@ describe('calcGridDropIndex', () => {
     it('handles drop at exact boundary', () => {
         // x=30 → col 1, y=0 → row 0, index = 0*10 + 1 = 1
         assert.equal(calcGridDropIndex(30, 0, 30, 30, 10, 20), 1);
+    });
+});
+
+describe('calcContainerWidth', () => {
+    // Exact width = cols * cellWidth + (cols - 1) * spacing
+    // Uses calcContainerColumns internally for column count.
+
+    it('returns 0 for 0 items', () => {
+        assert.equal(calcContainerWidth(0, 2, 30, 2, 0), 0);
+    });
+
+    it('returns 0 for invalid maxRows', () => {
+        assert.equal(calcContainerWidth(5, 0, 30, 2, 0), 0);
+    });
+
+    it('returns 0 for invalid cellWidth', () => {
+        assert.equal(calcContainerWidth(5, 2, 0, 2, 0), 0);
+    });
+
+    it('1 item, maxRows=2, cellW=30, spacing=2 → 30px', () => {
+        // 1 col × 30 + 0 gaps = 30
+        assert.equal(calcContainerWidth(1, 2, 30, 2, 0), 30);
+    });
+
+    it('2 items, maxRows=2 → 2 cols → 62px', () => {
+        // 2 × 30 + 1 × 2 = 62
+        assert.equal(calcContainerWidth(2, 2, 30, 2, 0), 62);
+    });
+
+    it('3 items, maxRows=2 → 2 cols → 62px', () => {
+        // calcContainerColumns(3, 2) = 2
+        // 2 × 30 + 1 × 2 = 62
+        assert.equal(calcContainerWidth(3, 2, 30, 2, 0), 62);
+    });
+
+    it('5 items, maxRows=2 → 3 cols → 94px', () => {
+        // calcContainerColumns(5, 2) = 3
+        // 3 × 30 + 2 × 2 = 94
+        assert.equal(calcContainerWidth(5, 2, 30, 2, 0), 94);
+    });
+
+    it('7 items, maxRows=2 → 4 cols → 126px', () => {
+        // calcContainerColumns(7, 2) = 4
+        // 4 × 30 + 3 × 2 = 126
+        assert.equal(calcContainerWidth(7, 2, 30, 2, 0), 126);
+    });
+
+    it('10 items, maxRows=2 → 5 cols → 158px', () => {
+        // 5 × 30 + 4 × 2 = 158
+        assert.equal(calcContainerWidth(10, 2, 30, 2, 0), 158);
+    });
+
+    it('7 items, maxRows=3 → 3 cols → 94px', () => {
+        // calcContainerColumns(7, 3) = 3
+        // 3 × 30 + 2 × 2 = 94
+        assert.equal(calcContainerWidth(7, 3, 30, 2, 0), 94);
+    });
+
+    it('handles spacing=0', () => {
+        // 4 × 30 + 0 = 120
+        assert.equal(calcContainerWidth(7, 2, 30, 0, 0), 120);
+    });
+
+    it('applies maxWidth cap', () => {
+        // Calculated: 4 × 30 + 3 × 2 = 126, but maxWidth=100
+        assert.equal(calcContainerWidth(7, 2, 30, 2, 100), 100);
+    });
+
+    it('maxWidth=0 means no limit', () => {
+        assert.equal(calcContainerWidth(7, 2, 30, 2, 0), 126);
+    });
+
+    it('maxWidth larger than needed has no effect', () => {
+        assert.equal(calcContainerWidth(7, 2, 30, 2, 500), 126);
     });
 });

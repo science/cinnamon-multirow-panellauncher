@@ -293,10 +293,10 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         }
         else
         {
-            enforcedSize = -1;
+            return; // allocation not valid yet — skip sizing
         }
 
-        if (enforcedSize < this.icon.get_icon_size()) {
+        if (enforcedSize > 0 && enforcedSize < this.icon.get_icon_size()) {
             this.icon.set_icon_size(enforcedSize);
         }
     }
@@ -354,7 +354,7 @@ class LaunchersBox {
         }
 
         this.manager = manager;
-        this.actor = new Clutter.Actor({ layout_manager: manager });
+        this.actor = new Clutter.Actor({ layout_manager: manager, clip_to_allocation: true });
         this.actor._delegate = this;
         this.actor.connect("destroy", () => this._destroy());
 
@@ -481,6 +481,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this.settings.bind("allow-dragging", "allowDragging", this._updateLauncherDrag);
         this.settings.bind("max-rows", "maxRows", this._onLayoutSettingsChanged);
         this.settings.bind("icon-size-override", "iconSizeOverride", this._onLayoutSettingsChanged);
+        this.settings.bind("max-width", "maxWidth", this._onLayoutSettingsChanged);
 
         this.uuid = metadata.uuid;
 
@@ -516,16 +517,46 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._reload();
     }
 
+    // Set the container to the content-based width so the panel zone
+    // allocates proportionally and FlowLayout has an explicit width
+    // for computing row heights (Cinnamon 6.0.4 FlowLayout quirk:
+    // without explicit width, children get h=0).
+    _updateContainerWidth() {
+        let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
+        if (!isHorizontal) return;
+
+        let count = this._launchers.length;
+        if (count === 0) {
+            this.myactor.set_width(-1);
+            this.myactor.min_width = 0;
+            return;
+        }
+
+        // Determine cell width: query first child's styled allocation, or estimate.
+        let cellW = this.icon_size + 4; // fallback: icon + CSS padding estimate
+        if (this._launchers.length > 0) {
+            let firstActor = this._launchers[0].actor;
+            let [, natW] = firstActor.get_preferred_width(-1);
+            if (natW >= this.icon_size) {
+                cellW = natW;
+            }
+        }
+
+        let spacing = 2; // column_spacing
+        let maxWidth = this.maxWidth || 0;
+        let desiredW = Helpers.calcContainerWidth(count, this.maxRows, cellW, spacing, maxWidth);
+
+        this.myactor.set_width(desiredW);
+        this.myactor.min_width = 0;
+    }
+
     _onAllocationChanged() {
         if (this._inAllocationUpdate) return;
         this._inAllocationUpdate = true;
         try {
-            let allocBox = this.actor.get_allocation_box();
-            let width = allocBox.x2 - allocBox.x1;
-            if (width > 0) {
-                this.myactor.set_width(width);
-                this.myactor.min_width = 0;
-            }
+            this.myactor.min_width = 0;
+            // Re-compute width now that children have their CSS-styled sizes.
+            this._updateContainerWidth();
         } finally {
             this._inAllocationUpdate = false;
         }
@@ -627,7 +658,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     on_panel_icon_size_changed(size) {
-        this.icon_size = size;
+        this._recalcIconSize();
         this._reload();
     }
 
@@ -679,6 +710,8 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             }
             this._settings_proxy.push(proxyObj);
         }
+
+        this._updateContainerWidth();
     }
 
     removeLauncher(launcher, delete_file) {
@@ -697,6 +730,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
 
         this.sync_settings_proxy_to_settings();
+        this._updateContainerWidth();
     }
 
     // Called by the Cinnamon menu's "Add to Panel" when this applet holds
@@ -710,6 +744,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._launchers.push(newLauncher);
         this._insert_proxy_member({ file: path, valid: true, launcher: newLauncher }, -1);
         this.sync_settings_proxy_to_settings();
+        this._updateContainerWidth();
     }
 
     showAddLauncherDialog(timestamp, launcher){

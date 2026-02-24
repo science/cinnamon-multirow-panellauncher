@@ -73,5 +73,15 @@ describe('settings-schema.json', () => {
             assert.equal(s.max, 64);
             assert.equal(s.step, 2);
         });
+
+        it('has max-width spinbutton (0=no limit, max 800)', () => {
+            const s = schema['max-width'];
+            assert.ok(s, 'missing max-width');
+            assert.equal(s.type, 'spinbutton');
+            assert.equal(s.default, 0);
+            assert.equal(s.min, 0);
+            assert.equal(s.max, 800);
+            assert.equal(s.step, 10);
+        });
     });
 });

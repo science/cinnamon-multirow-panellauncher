@@ -237,7 +237,11 @@ take_screenshot() {
     local label="$1"
     local filename="vm-panel-${label}.png"
     mkdir -p "$SCREENSHOT_DIR"
-    vm_run "xwd -root -silent | convert xwd:- png:/tmp/screenshot.png" 2>/dev/null
+    # gnome-screenshot captures the composited output reliably;
+    # xwd misses it. Crop to bottom 65px to show just the panel.
+    vm_ssh "rm -f /tmp/screenshot-full.png /tmp/screenshot.png; \
+        DISPLAY=:0 gnome-screenshot -f /tmp/screenshot-full.png 2>/dev/null && \
+        convert /tmp/screenshot-full.png -gravity South -crop 0x65+0+0 +repage /tmp/screenshot.png" 2>/dev/null
     scp $SSH_OPTS "steve@$(get_vm_ip):/tmp/screenshot.png" "$SCREENSHOT_DIR/$filename" 2>/dev/null
     echo "$SCREENSHOT_DIR/$filename"
 }
@@ -256,6 +260,7 @@ query_panel_state() {
             let y = Math.round(c.get_allocation_box().y1);
             yValues[y] = (yValues[y] || 0) + 1;
         });
+        let ab = app.actor.get_allocation_box();
         JSON.stringify({
             screenWidth: global.screen_width,
             panelHeight: Main.panel.height,
@@ -270,6 +275,7 @@ query_panel_state() {
             childCount: children.length,
             iconSize: app.icon_size,
             maxRows: app.maxRows,
+            actorW: Math.round(ab.x2 - ab.x1),
             containerW: Math.round(app.myactor.get_allocation_box().x2 - app.myactor.get_allocation_box().x1),
             containerH: Math.round(app.myactor.get_allocation_box().y2 - app.myactor.get_allocation_box().y1),
             rowDistribution: yValues
@@ -407,7 +413,7 @@ run_test_case() {
     state=$(query_panel_state)
 
     local screen_w left_w center_w right_w right_x2 min_w
-    local lc child_count icon_sz max_rows container_w container_h
+    local lc child_count icon_sz max_rows actor_w container_w container_h
     local row_dist row_count
     screen_w=$(json_field "$state" screenWidth)
     left_w=$(json_field "$state" leftWidth)
@@ -419,6 +425,7 @@ run_test_case() {
     child_count=$(json_field "$state" childCount)
     icon_sz=$(json_field "$state" iconSize)
     max_rows=$(json_field "$state" maxRows)
+    actor_w=$(json_field "$state" actorW)
     container_w=$(json_field "$state" containerW)
     container_h=$(json_field "$state" containerH)
     row_dist=$(json_dict_field "$state" rowDistribution)
@@ -426,7 +433,7 @@ run_test_case() {
 
     echo -e "  ${CYAN}INFO${NC} zones: left=${left_w}px center=${center_w}px right=${right_w}px | screen=${screen_w}px"
     echo -e "  ${CYAN}INFO${NC} launchers: count=$lc children=$child_count icon=${icon_sz}px maxRows=$max_rows"
-    echo -e "  ${CYAN}INFO${NC} container: ${container_w}x${container_h}px | rows=$row_count distribution=$row_dist"
+    echo -e "  ${CYAN}INFO${NC} applet: actorW=${actor_w}px container=${container_w}x${container_h}px | rows=$row_count distribution=$row_dist"
 
     # --- Assertions ---
 
@@ -515,7 +522,28 @@ run_test_case() {
         fi
     fi
 
-    # 10. Take screenshot
+    # 10. Content-proportional width: for small counts, applet should not inflate to zone width
+    if [[ $launcher_count -eq 0 ]]; then
+        if [[ $actor_w -lt 50 ]]; then
+            test_result "Applet width proportional to content" "pass" "${actor_w}px (0 launchers)"
+        else
+            test_result "Applet width proportional to content" "fail" "${actor_w}px — should be <50px with 0 launchers"
+        fi
+    elif [[ $launcher_count -eq 1 ]]; then
+        if [[ $actor_w -lt 80 ]]; then
+            test_result "Applet width proportional to content" "pass" "${actor_w}px (1 launcher)"
+        else
+            test_result "Applet width proportional to content" "fail" "${actor_w}px — should be <80px with 1 launcher"
+        fi
+    elif [[ $launcher_count -le 5 ]]; then
+        if [[ $actor_w -lt 250 ]]; then
+            test_result "Applet width proportional to content" "pass" "${actor_w}px ($launcher_count launchers)"
+        else
+            test_result "Applet width proportional to content" "fail" "${actor_w}px — should be <250px with $launcher_count launchers"
+        fi
+    fi
+
+    # 11. Take screenshot
     local screenshot_file
     screenshot_file=$(take_screenshot "${launcher_count}launchers" 2>/dev/null) || true
     if [[ -f "$screenshot_file" ]]; then

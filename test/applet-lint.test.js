@@ -91,15 +91,23 @@ describe('applet.js safety checks', () => {
             );
         });
 
-        it('uses get_allocation_box in _onAllocationChanged', () => {
-            const methodMatch = appletSource.match(
-                /_onAllocationChanged\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+        it('has _updateContainerWidth that sets content-based width', () => {
+            assert.ok(
+                appletSource.includes('_updateContainerWidth'),
+                'must have _updateContainerWidth method'
             );
-            assert.ok(methodMatch, 'could not find _onAllocationChanged body');
+            const methodMatch = appletSource.match(
+                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _updateContainerWidth body');
             const body = methodMatch[1];
             assert.ok(
-                body.includes('get_allocation_box'),
-                '_onAllocationChanged must use get_allocation_box() for width'
+                body.includes('set_width'),
+                '_updateContainerWidth must call set_width with content-based width'
+            );
+            assert.ok(
+                body.includes('get_preferred_width'),
+                '_updateContainerWidth must query FlowLayout for content width'
             );
         });
 
@@ -124,6 +132,18 @@ describe('applet.js safety checks', () => {
             assert.ok(
                 body.includes('min_width = 0'),
                 '_onAllocationChanged must re-assert min_width = 0'
+            );
+        });
+
+        it('calls _updateContainerWidth from _onAllocationChanged', () => {
+            const methodMatch = appletSource.match(
+                /_onAllocationChanged\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_updateContainerWidth'),
+                '_onAllocationChanged must call _updateContainerWidth to correct sizing after children are styled'
             );
         });
     });
@@ -168,6 +188,67 @@ describe('applet.js safety checks', () => {
             assert.ok(
                 appletSource.includes('calcLauncherIconSize'),
                 'must use calcLauncherIconSize from helpers'
+            );
+        });
+
+        it('calls calcContainerWidth for width calculation', () => {
+            assert.ok(
+                appletSource.includes('calcContainerWidth'),
+                'must use calcContainerWidth from helpers for container width'
+            );
+        });
+    });
+
+    describe('on_panel_icon_size_changed', () => {
+        it('uses _recalcIconSize instead of raw assignment', () => {
+            const methodMatch = appletSource.match(
+                /on_panel_icon_size_changed\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find on_panel_icon_size_changed body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_recalcIconSize'),
+                'on_panel_icon_size_changed must use _recalcIconSize() for multi-row calculation'
+            );
+            assert.ok(
+                !body.includes('this.icon_size = size') && !body.includes('this.icon_size=size'),
+                'on_panel_icon_size_changed must not directly assign this.icon_size = size'
+            );
+        });
+    });
+
+    describe('_updateIconSize guard', () => {
+        it('does not set icon_size to negative values', () => {
+            const methodMatch = appletSource.match(
+                /_updateIconSize\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _updateIconSize body');
+            const body = methodMatch[1];
+            // Must not contain the raw "enforcedSize = -1" pattern
+            assert.ok(
+                !body.includes('enforcedSize = -1'),
+                '_updateIconSize must not set enforcedSize to -1 (bail out on invalid allocation instead)'
+            );
+        });
+    });
+
+    describe('width calculation', () => {
+        it('_updateContainerWidth uses calcContainerWidth from helpers', () => {
+            const methodMatch = appletSource.match(
+                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _updateContainerWidth body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('calcContainerWidth'),
+                '_updateContainerWidth must use Helpers.calcContainerWidth for exact width math'
+            );
+        });
+
+        it('container has clip_to_allocation for overflow safety', () => {
+            assert.ok(
+                appletSource.includes('clip_to_allocation'),
+                'FlowLayout container must set clip_to_allocation as overflow safety net'
             );
         });
     });

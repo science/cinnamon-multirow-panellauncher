@@ -33,6 +33,38 @@ function calcNeededRows(containerWidth, launcherCount, cellSize, maxRows) {
 }
 
 /**
+ * Calculate the number of columns for a container given item count and max rows.
+ * Items fill left-to-right first; only wraps to a new row when needed.
+ * When count <= maxRows, all items stay in one row (no unnecessary stacking).
+ * @param {number} count - Number of items
+ * @param {number} maxRows - Maximum allowed rows (1-4)
+ * @returns {number} Number of columns (0 if no items or invalid)
+ */
+function calcContainerColumns(count, maxRows) {
+    if (count <= 0 || maxRows <= 0) return 0;
+    if (count <= maxRows) return count;
+    return Math.ceil(count / maxRows);
+}
+
+/**
+ * Calculate the container width for a multi-row grid of items.
+ * Uses exact cell-width math: cols * cellWidth + (cols - 1) * spacing.
+ * @param {number} count - Number of items
+ * @param {number} maxRows - Maximum allowed rows (1-4)
+ * @param {number} cellWidth - Width per cell in pixels (icon + padding)
+ * @param {number} spacing - Column spacing in pixels
+ * @param {number} maxWidth - Maximum width cap (0 = no limit)
+ * @returns {number} Container width in pixels (0 if no items or invalid)
+ */
+function calcContainerWidth(count, maxRows, cellWidth, spacing, maxWidth) {
+    if (count <= 0 || maxRows <= 0 || cellWidth <= 0) return 0;
+    let cols = calcContainerColumns(count, maxRows);
+    let width = cols * cellWidth + Math.max(0, cols - 1) * spacing;
+    if (maxWidth > 0 && width > maxWidth) width = maxWidth;
+    return width;
+}
+
+/**
  * Calculate the drop index for a 2D grid given pointer coordinates.
  * @param {number} x - Pointer x relative to container
  * @param {number} y - Pointer y relative to container
@@ -53,6 +85,6 @@ function calcGridDropIndex(x, y, cellWidth, cellHeight, cols, totalItems) {
 // Export for Node.js testing; ignored in GJS runtime
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        calcLauncherIconSize, calcNeededRows, calcGridDropIndex
+        calcLauncherIconSize, calcNeededRows, calcContainerColumns, calcContainerWidth, calcGridDropIndex
     };
 }
