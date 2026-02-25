@@ -65,6 +65,27 @@ function calcContainerWidth(count, maxRows, cellWidth, spacing, maxWidth) {
 }
 
 /**
+ * Calculate how many launchers fit in the panel before overflow.
+ * Reserves one column for the chevron indicator when overflow is needed.
+ * Returns totalCount when all fit or maxWidth <= 0 (no limit).
+ * @param {number} totalCount - Total number of launchers
+ * @param {number} maxRows - Maximum allowed rows (1-4)
+ * @param {number} cellWidth - Width per cell in pixels (icon + padding)
+ * @param {number} spacing - Column spacing in pixels
+ * @param {number} maxWidth - Maximum container width (0 = no limit)
+ * @returns {number} Number of visible launchers (0 to totalCount)
+ */
+function calcVisibleLauncherCount(totalCount, maxRows, cellWidth, spacing, maxWidth) {
+    if (maxWidth <= 0 || totalCount <= 0) return totalCount;
+    let naturalWidth = calcContainerWidth(totalCount, maxRows, cellWidth, spacing, 0);
+    if (naturalWidth <= maxWidth) return totalCount; // all fit, no overflow
+    let maxCols = Math.floor((maxWidth + spacing) / (cellWidth + spacing));
+    let availCols = maxCols - 1; // reserve 1 column for chevron
+    if (availCols <= 0) return 0; // only chevron fits (or nothing)
+    return Math.min(availCols * maxRows, totalCount - 1); // at least 1 in overflow
+}
+
+/**
  * Calculate the drop index for a 2D grid given pointer coordinates.
  * @param {number} x - Pointer x relative to container
  * @param {number} y - Pointer y relative to container
@@ -85,6 +106,6 @@ function calcGridDropIndex(x, y, cellWidth, cellHeight, cols, totalItems) {
 // Export for Node.js testing; ignored in GJS runtime
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        calcLauncherIconSize, calcNeededRows, calcContainerColumns, calcContainerWidth, calcGridDropIndex
+        calcLauncherIconSize, calcNeededRows, calcContainerColumns, calcContainerWidth, calcVisibleLauncherCount, calcGridDropIndex
     };
 }

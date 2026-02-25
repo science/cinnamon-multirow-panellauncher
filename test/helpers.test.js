@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
     calcLauncherIconSize, calcNeededRows, calcGridDropIndex, calcContainerColumns,
-    calcContainerWidth
+    calcContainerWidth, calcVisibleLauncherCount
 } = require('../helpers');
 
 describe('calcLauncherIconSize', () => {
@@ -281,5 +281,85 @@ describe('calcContainerWidth', () => {
 
     it('maxWidth larger than needed has no effect', () => {
         assert.equal(calcContainerWidth(7, 2, 30, 2, 500), 126);
+    });
+});
+
+describe('calcVisibleLauncherCount', () => {
+    // calcVisibleLauncherCount(totalCount, maxRows, cellWidth, spacing, maxWidth)
+    // Returns how many launchers fit in the panel, reserving one column for chevron.
+
+    it('maxWidth=0 → returns totalCount (no limit)', () => {
+        assert.equal(calcVisibleLauncherCount(10, 2, 30, 2, 0), 10);
+    });
+
+    it('maxWidth negative → returns totalCount', () => {
+        assert.equal(calcVisibleLauncherCount(10, 2, 30, 2, -5), 10);
+    });
+
+    it('totalCount=0 → returns 0', () => {
+        assert.equal(calcVisibleLauncherCount(0, 2, 30, 2, 100), 0);
+    });
+
+    it('all fit naturally → returns totalCount', () => {
+        // 4 items, maxRows=2 → 2 cols → width = 2*30 + 1*2 = 62. maxWidth=100 → all fit
+        assert.equal(calcVisibleLauncherCount(4, 2, 30, 2, 100), 4);
+    });
+
+    it('basic overflow: 10 items, maxRows=2, cellW=30, spacing=2, maxWidth=100', () => {
+        // maxCols = floor((100+2)/(30+2)) = floor(102/32) = 3
+        // availCols = 3 - 1 = 2
+        // visible = min(2*2, 10-1) = min(4, 9) = 4
+        assert.equal(calcVisibleLauncherCount(10, 2, 30, 2, 100), 4);
+    });
+
+    it('maxWidth too small for any cell → 0', () => {
+        // maxCols = floor((10+2)/(30+2)) = floor(12/32) = 0
+        // availCols = 0 - 1 = -1 → 0
+        assert.equal(calcVisibleLauncherCount(10, 2, 30, 2, 10), 0);
+    });
+
+    it('room for chevron only → 0', () => {
+        // maxCols = floor((32+2)/(30+2)) = floor(34/32) = 1
+        // availCols = 1 - 1 = 0
+        assert.equal(calcVisibleLauncherCount(10, 2, 30, 2, 32), 0);
+    });
+
+    it('single row (maxRows=1)', () => {
+        // 10 items, maxRows=1, cellW=30, spacing=2, maxWidth=200
+        // naturalWidth = calcContainerWidth(10, 1, 30, 2, 0) = 10*30 + 9*2 = 318
+        // maxCols = floor((200+2)/(30+2)) = floor(202/32) = 6
+        // availCols = 6 - 1 = 5
+        // visible = min(5*1, 10-1) = min(5, 9) = 5
+        assert.equal(calcVisibleLauncherCount(10, 1, 30, 2, 200), 5);
+    });
+
+    it('1 launcher that fits → returns 1 (no overflow)', () => {
+        // naturalWidth = calcContainerWidth(1, 2, 30, 2, 0) = 30
+        // 30 <= 100 → all fit
+        assert.equal(calcVisibleLauncherCount(1, 2, 30, 2, 100), 1);
+    });
+
+    it('1 launcher that does not fit → returns 0', () => {
+        // naturalWidth = calcContainerWidth(1, 2, 30, 2, 0) = 30 > 10
+        // maxCols = floor(12/32) = 0, availCols = -1 → 0
+        assert.equal(calcVisibleLauncherCount(1, 2, 30, 2, 10), 0);
+    });
+
+    it('ensures at least 1 in overflow (does not return totalCount when overflow needed)', () => {
+        // 5 items, maxRows=2, cellW=30, spacing=2, maxWidth=130
+        // naturalWidth = calcContainerWidth(5, 2, 30, 2, 0) = 3*30 + 2*2 = 94
+        // Wait — 94 <= 130, so all fit. Need a tighter case.
+        // 5 items, maxRows=2, cellW=30, spacing=2, maxWidth=90
+        // naturalWidth = 94 > 90 → overflow needed
+        // maxCols = floor(92/32) = 2, availCols = 2 - 1 = 1
+        // visible = min(1*2, 5-1) = min(2, 4) = 2
+        assert.equal(calcVisibleLauncherCount(5, 2, 30, 2, 90), 2);
+    });
+
+    it('large overflow: 20 items, maxRows=2, cellW=30, spacing=2, maxWidth=200', () => {
+        // naturalWidth = calcContainerWidth(20, 2, 30, 2, 0) = 10*30 + 9*2 = 318 > 200
+        // maxCols = floor(202/32) = 6, availCols = 5
+        // visible = min(5*2, 20-1) = min(10, 19) = 10
+        assert.equal(calcVisibleLauncherCount(20, 2, 30, 2, 200), 10);
     });
 });

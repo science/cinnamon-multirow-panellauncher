@@ -274,8 +274,15 @@ class PanelAppLauncher extends DND.LauncherDraggable {
         if (pressLauncher == this.getAppname()){
             let button = event.get_button();
             if (button==1) {
-                if (this._menu.isOpen) this._menu.toggle();
-                else this.launch();
+                if (this._menu.isOpen) {
+                    this._menu.toggle();
+                } else {
+                    this.launch();
+                    // Close overflow popup if this launcher is inside it
+                    if (this.launchersBox.applet._overflowPanelOpen) {
+                        this.launchersBox.applet._closeOverflowPanel();
+                    }
+                }
             }
         }
     }
@@ -489,6 +496,14 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._launchers = [];
         this._inAllocationUpdate = false;
 
+        // Overflow popup state (horizontal panels only, when max-width clips launchers)
+        this._overflowPanel = null;         // St.Bin on Main.uiGroup
+        this._overflowPanelOpen = false;    // manual open/close tracking
+        this._capturedEventId = 0;          // for click-outside handler
+        this._overflowGrid = null;          // Clutter.Actor with FlowLayout
+        this._overflowIndicator = null;     // St.Button (chevron, child of this.actor)
+        this._overflowStartIndex = -1;      // -1 = no overflow
+
         this.actor.add(this.myactor);
         this.actor.reactive = global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
         global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._onPanelEditModeChanged));
@@ -517,6 +532,15 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._reload();
     }
 
+    _getCellWidth() {
+        let cellW = this.icon_size + 4; // fallback: icon + CSS padding estimate
+        if (this._launchers.length > 0) {
+            let [, natW] = this._launchers[0].actor.get_preferred_width(-1);
+            if (natW >= this.icon_size) cellW = natW;
+        }
+        return cellW;
+    }
+
     // Set the container to the content-based width so the panel zone
     // allocates proportionally and FlowLayout has an explicit width
     // for computing row heights (Cinnamon 6.0.4 FlowLayout quirk:
@@ -525,23 +549,14 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
         if (!isHorizontal) return;
 
-        let count = this._launchers.length;
+        let count = this.myactor.get_n_children();
         if (count === 0) {
             this.myactor.set_width(-1);
             this.myactor.min_width = 0;
             return;
         }
 
-        // Determine cell width: query first child's styled allocation, or estimate.
-        let cellW = this.icon_size + 4; // fallback: icon + CSS padding estimate
-        if (this._launchers.length > 0) {
-            let firstActor = this._launchers[0].actor;
-            let [, natW] = firstActor.get_preferred_width(-1);
-            if (natW >= this.icon_size) {
-                cellW = natW;
-            }
-        }
-
+        let cellW = this._getCellWidth();
         let spacing = 2; // column_spacing
         let maxWidth = this.maxWidth || 0;
         let desiredW = Helpers.calcContainerWidth(count, this.maxRows, cellW, spacing, maxWidth);
@@ -560,6 +575,341 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         } finally {
             this._inAllocationUpdate = false;
         }
+    }
+
+    _ensureOverflowUI() {
+        if (this._overflowPanel) return; // already created
+
+        let cellW = this._getCellWidth();
+
+        // Chevron button — added to this.actor (applet-box), NOT myactor.
+        // This keeps it outside the FlowLayout so DND never touches it.
+        this._overflowIndicator = new St.Button({
+            style_class: 'launcher',
+            important: true,
+            reactive: true,
+            can_focus: true,
+            x_fill: true,
+            y_fill: true,
+            track_hover: true
+        });
+        let chevronIcon = new St.Icon({
+            icon_name: 'pan-down-symbolic',
+            icon_size: this.icon_size,
+            icon_type: St.IconType.SYMBOLIC
+        });
+        this._overflowIndicator.set_child(chevronIcon);
+        this._overflowIndicator.connect('clicked', () => this._toggleOverflowPanel());
+        this.actor.add(this._overflowIndicator);
+
+        // Overflow grid — FlowLayout for multi-row popup
+        let gridManager = new Clutter.FlowLayout({
+            orientation: Clutter.FlowOrientation.HORIZONTAL,
+            homogeneous: true,
+            column_spacing: 4,
+            row_spacing: 4
+        });
+        this._overflowGrid = new Clutter.Actor({
+            layout_manager: gridManager,
+            clip_to_allocation: true
+        });
+        // Set grid width: 5 columns of icons
+        let gridWidth = 5 * cellW + 4 * 4;
+        this._overflowGrid.set_width(gridWidth);
+
+        // DND delegate for reordering within the overflow popup
+        let applet = this;
+        this._overflowGrid._delegate = {
+            handleDragOver(source, actor, x, y, time) {
+                if (!(source instanceof DND.LauncherDraggable)) {
+                    return DND.DragMotionResult.NO_DROP;
+                }
+                let children = applet._overflowGrid.get_children();
+                let dropIndex = 0;
+                let minDist = -1;
+                for (let i = 0; i < children.length; i++) {
+                    if (!children[i].visible) continue;
+                    let alloc = children[i].get_allocation_box();
+                    let cx = (alloc.x1 + alloc.x2) / 2;
+                    let cy = (alloc.y1 + alloc.y2) / 2;
+                    let dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+                    if (dist < minDist || minDist === -1) {
+                        minDist = dist;
+                        dropIndex = i;
+                    }
+                }
+                // Store target index (offset by overflow start)
+                applet._overflowGrid._dragTargetIndex = dropIndex;
+
+                // Move actor visually within the grid
+                let overflowIndex = applet._launchers.indexOf(source) - applet._overflowStartIndex;
+                if (overflowIndex >= 0 && dropIndex !== overflowIndex) {
+                    applet._overflowGrid.set_child_at_index(source.actor, dropIndex);
+                }
+
+                return DND.DragMotionResult.MOVE_DROP;
+            },
+
+            acceptDrop(source, actor, x, y, time) {
+                if (!(source instanceof DND.LauncherDraggable)) return false;
+                let dropIndex = applet._overflowGrid._dragTargetIndex;
+                if (dropIndex == null) return false;
+                applet._overflowGrid._dragTargetIndex = null;
+
+                // Compute the global launcher index
+                let globalIndex = applet._overflowStartIndex + dropIndex;
+                applet._reinsertAtIndex(source, globalIndex);
+                return true;
+            }
+        };
+
+        // Standalone overflow panel on Main.uiGroup — no modal grab,
+        // so DND works while the panel is open.
+        this._overflowPanel = new St.Bin({
+            style_class: 'menu',
+            style: 'border: 1px solid rgba(255,255,255,0.3); padding: 4px;',
+            important: true,
+            reactive: true,
+            visible: false
+        });
+        this._overflowPanel._delegate = this._overflowGrid._delegate;
+        this._overflowPanel.set_child(this._overflowGrid);
+        Main.uiGroup.add_child(this._overflowPanel);
+    }
+
+    _destroyOverflowUI() {
+        if (this._overflowPanelOpen) this._closeOverflowPanel();
+        if (this._overflowPanel) {
+            Main.uiGroup.remove_child(this._overflowPanel);
+            this._overflowPanel.destroy();
+            this._overflowPanel = null;
+        }
+        if (this._overflowGrid) {
+            this._overflowGrid._delegate = null;
+            this._overflowGrid = null;
+        }
+        if (this._overflowIndicator) {
+            this.actor.remove_child(this._overflowIndicator);
+            this._overflowIndicator.destroy();
+            this._overflowIndicator = null;
+        }
+        this._overflowStartIndex = -1;
+        this._overflowPanelOpen = false;
+    }
+
+    _toggleOverflowPanel() {
+        if (this._overflowPanelOpen)
+            this._closeOverflowPanel();
+        else
+            this._openOverflowPanel();
+    }
+
+    _openOverflowPanel() {
+        if (!this._overflowPanel || this._overflowPanelOpen) return;
+
+        this._overflowPanelOpen = true;
+
+        // Constrain panel to its preferred size before showing.
+        // Main.uiGroup uses NO_LAYOUT which allocates natural size for
+        // unconstrained width — causing the St.Bin to be too tall.
+        let [, pw] = this._overflowPanel.get_preferred_width(-1);
+        let [, ph] = this._overflowPanel.get_preferred_height(pw);
+        this._overflowPanel.set_width(pw);
+        this._overflowPanel.set_height(ph);
+
+        let [x, y] = this._calcOverflowPanelPosition();
+        this._overflowPanel.set_position(x, y);
+        this._overflowPanel.show();
+        this._overflowPanel.raise_top();
+
+        // Update chevron icon direction
+        if (this._overflowIndicator) {
+            let icon = this._overflowIndicator.get_child();
+            if (icon) icon.icon_name = 'pan-up-symbolic';
+        }
+
+        // Click-outside / Escape detection via captured-event on global.stage
+        this._capturedEventId = global.stage.connect('captured-event',
+            (stage, event) => this._onOverflowCapturedEvent(event));
+    }
+
+    _closeOverflowPanel() {
+        if (!this._overflowPanel) return;
+
+        this._overflowPanel.hide();
+        this._overflowPanelOpen = false;
+
+        // Update chevron icon direction
+        if (this._overflowIndicator) {
+            let icon = this._overflowIndicator.get_child();
+            if (icon) icon.icon_name = 'pan-down-symbolic';
+        }
+
+        // Disconnect captured-event handler
+        if (this._capturedEventId) {
+            global.stage.disconnect(this._capturedEventId);
+            this._capturedEventId = 0;
+        }
+    }
+
+    _calcOverflowPanelPosition() {
+        let alloc = Cinnamon.util_get_transformed_allocation(this.actor);
+        let monitor = Main.layoutManager.findMonitorForActor(this.actor);
+
+        // Use preferred size so positioning works even before first allocation.
+        // get_preferred_height(width) gives the correct wrapped height because
+        // the grid child has an explicit fixed width (set_width in _ensureOverflowUI).
+        let [, panelW] = this._overflowPanel.get_preferred_width(-1);
+        let [, panelH] = this._overflowPanel.get_preferred_height(panelW);
+
+        // Center horizontally on the applet, clamp to monitor edges
+        let x = Math.round((alloc.x1 + alloc.x2) / 2 - panelW / 2);
+        if (monitor) {
+            x = Math.max(monitor.x, Math.min(x, monitor.x + monitor.width - panelW));
+        }
+
+        // TOP panel → below applet; BOTTOM panel → above applet
+        let y;
+        if (this.orientation === St.Side.TOP) {
+            y = alloc.y2;
+        } else {
+            y = alloc.y1 - panelH;
+        }
+
+        return [x, y];
+    }
+
+    _onOverflowCapturedEvent(event) {
+        let type = event.type();
+
+        // Escape key closes
+        if (type === Clutter.EventType.KEY_PRESS) {
+            if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                this._closeOverflowPanel();
+                return Clutter.EVENT_STOP;
+            }
+        }
+
+        // Click outside panel, chevron, AND applet closes.
+        // Keep open for applet-area clicks so DND from panel into overflow works.
+        // Use bounding-box hit test (not get_actor_at_pos) because the
+        // overflow grid Clutter.Actor is non-reactive and pick-mode skips it.
+        if (type === Clutter.EventType.BUTTON_PRESS) {
+            let [ex, ey] = event.get_coords();
+
+            let insidePanel = false;
+            if (this._overflowPanel) {
+                let [px, py] = this._overflowPanel.get_transformed_position();
+                let [pw, ph] = this._overflowPanel.get_transformed_size();
+                insidePanel = (ex >= px && ex <= px + pw && ey >= py && ey <= py + ph);
+            }
+
+            let insideChevron = false;
+            if (this._overflowIndicator) {
+                let [cx, cy] = this._overflowIndicator.get_transformed_position();
+                let [cw, ch] = this._overflowIndicator.get_transformed_size();
+                insideChevron = (ex >= cx && ex <= cx + cw && ey >= cy && ey <= cy + ch);
+            }
+
+            let insideApplet = false;
+            if (this.actor) {
+                let [ax, ay] = this.actor.get_transformed_position();
+                let [aw, ah] = this.actor.get_transformed_size();
+                insideApplet = (ex >= ax && ex <= ax + aw && ey >= ay && ey <= ay + ah);
+            }
+
+            if (!insidePanel && !insideChevron && !insideApplet) {
+                this._closeOverflowPanel();
+                return Clutter.EVENT_STOP;
+            }
+        }
+
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _calcOverflowSplit() {
+        let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
+        if (!isHorizontal) return -1;
+        let maxWidth = this.maxWidth || 0;
+        if (maxWidth <= 0) return -1;
+        let visible = Helpers.calcVisibleLauncherCount(
+            this._launchers.length, this.maxRows, this._getCellWidth(), 2, maxWidth
+        );
+        if (visible >= this._launchers.length) return -1; // all fit
+        return visible;
+    }
+
+    _connectOverflowHover(launcher) {
+        let actor = launcher.actor;
+        if (actor._overflowHoverIds) return; // already connected
+        let enterId = actor.connect('enter-event', () => {
+            actor.set_style('border: 1px solid rgba(255,255,255,0.5); border-radius: 4px;');
+        });
+        let leaveId = actor.connect('leave-event', () => {
+            actor.set_style('');
+        });
+        let pressId = actor.connect('button-press-event', () => {
+            actor.set_style('border: 1px solid rgba(255,255,255,0.8); border-radius: 4px; background-color: rgba(255,255,255,0.2);');
+        });
+        let releaseId = actor.connect('button-release-event', () => {
+            actor.set_style('');
+        });
+        actor._overflowHoverIds = [enterId, leaveId, pressId, releaseId];
+    }
+
+    _disconnectOverflowHover(launcher) {
+        let actor = launcher.actor;
+        if (!actor._overflowHoverIds) return;
+        for (let id of actor._overflowHoverIds) actor.disconnect(id);
+        actor._overflowHoverIds = null;
+        actor.set_style('');
+    }
+
+    _redistributeLaunchers() {
+        let splitIndex = this._calcOverflowSplit();
+
+        if (splitIndex === -1) {
+            // No overflow needed — all launchers in panel
+            // Reparent any overflow launchers back to myactor
+            for (let i = 0; i < this._launchers.length; i++) {
+                this._disconnectOverflowHover(this._launchers[i]);
+                let actor = this._launchers[i].actor;
+                let parent = actor.get_parent();
+                if (parent !== this.myactor) {
+                    if (parent) parent.remove_child(actor);
+                    this.myactor.add_actor(actor);
+                }
+            }
+            this._destroyOverflowUI();
+        } else {
+            // Overflow needed
+            this._ensureOverflowUI();
+            this._overflowStartIndex = splitIndex;
+
+            // Launchers [0, splitIndex) → panel
+            for (let i = 0; i < splitIndex; i++) {
+                this._disconnectOverflowHover(this._launchers[i]);
+                let actor = this._launchers[i].actor;
+                let parent = actor.get_parent();
+                if (parent !== this.myactor) {
+                    if (parent) parent.remove_child(actor);
+                    this.myactor.add_actor(actor);
+                }
+            }
+
+            // Launchers [splitIndex, length) → overflow grid
+            for (let i = splitIndex; i < this._launchers.length; i++) {
+                this._connectOverflowHover(this._launchers[i]);
+                let actor = this._launchers[i].actor;
+                let parent = actor.get_parent();
+                if (parent !== this._overflowGrid) {
+                    if (parent) parent.remove_child(actor);
+                    this._overflowGrid.add_actor(actor);
+                }
+            }
+        }
+
+        this._updateContainerWidth();
     }
 
     _updateLauncherDrag() {
@@ -681,6 +1031,8 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             this.signals.disconnect('notify::allocation', this.actor);
             this.signals.connect(this.actor, 'notify::allocation', this._onAllocationChanged, this);
         } else {
+            this._destroyOverflowUI();
+
             let manager = new Clutter.BoxLayout({ orientation: Clutter.Orientation.VERTICAL });
             this.launchersBox.manager = manager;
             this.myactor.set_layout_manager(manager);
@@ -695,6 +1047,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     _reload() {
+        if (this._overflowPanelOpen)
+            this._closeOverflowPanel();
+        this._destroyOverflowUI();
+
         this._launchers.forEach(l => l.destroy());
         this._launchers = [];
         this._settings_proxy = [];
@@ -703,7 +1059,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             let launcher = this._loadLauncher(file);
             let proxyObj = { file: file, valid: false, launcher: null };
             if (launcher) {
-                this.myactor.add_actor(launcher.actor);
                 this._launchers.push(launcher);
                 proxyObj.valid = true;
                 proxyObj.launcher = launcher;
@@ -711,7 +1066,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             this._settings_proxy.push(proxyObj);
         }
 
-        this._updateContainerWidth();
+        this._redistributeLaunchers();
     }
 
     removeLauncher(launcher, delete_file) {
@@ -730,7 +1085,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
 
         this.sync_settings_proxy_to_settings();
-        this._updateContainerWidth();
+        this._redistributeLaunchers();
     }
 
     // Called by the Cinnamon menu's "Add to Panel" when this applet holds
@@ -740,11 +1095,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         if (!newLauncher)
             return;
 
-        this.myactor.add_actor(newLauncher.actor);
         this._launchers.push(newLauncher);
         this._insert_proxy_member({ file: path, valid: true, launcher: newLauncher }, -1);
         this.sync_settings_proxy_to_settings();
-        this._updateContainerWidth();
+        this._redistributeLaunchers();
     }
 
     showAddLauncherDialog(timestamp, launcher){
@@ -763,11 +1117,11 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             return;
 
         if (originalIndex != newIndex) {
-            this.myactor.set_child_at_index(launcher.actor, newIndex);
             this._launchers.splice(originalIndex, 1);
             this._launchers.splice(newIndex, 0, launcher);
             this._move_launcher_in_proxy(launcher, newIndex);
             this.sync_settings_proxy_to_settings();
+            this._redistributeLaunchers();
         }
     }
 
@@ -776,6 +1130,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     on_applet_removed_from_panel() {
+        this._destroyOverflowUI();
         this._launchers.forEach(l => l.destroy());
         this._launchers = [];
         this.signals.disconnectAllSignals();

@@ -106,8 +106,20 @@ describe('applet.js safety checks', () => {
                 '_updateContainerWidth must call set_width with content-based width'
             );
             assert.ok(
+                body.includes('_getCellWidth'),
+                '_updateContainerWidth must use _getCellWidth for cell width query'
+            );
+        });
+
+        it('_getCellWidth queries get_preferred_width', () => {
+            const methodMatch = appletSource.match(
+                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _getCellWidth body');
+            const body = methodMatch[1];
+            assert.ok(
                 body.includes('get_preferred_width'),
-                '_updateContainerWidth must query FlowLayout for content width'
+                '_getCellWidth must query get_preferred_width for content width'
             );
         });
 
@@ -273,6 +285,97 @@ describe('applet.js safety checks', () => {
             assert.ok(
                 appletSource.includes('acceptNewLauncher'),
                 'must have acceptNewLauncher for panellauncher role'
+            );
+        });
+    });
+
+    describe('overflow popup', () => {
+        it('destroys overflow UI in on_applet_removed_from_panel', () => {
+            const methodMatch = appletSource.match(
+                /on_applet_removed_from_panel\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find on_applet_removed_from_panel body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_destroyOverflowUI'),
+                'on_applet_removed_from_panel must call _destroyOverflowUI'
+            );
+        });
+
+        it('does not use AppletPopupMenu for overflow', () => {
+            // _ensureOverflowUI should NOT create an AppletPopupMenu
+            const methodMatch = appletSource.match(
+                /_ensureOverflowUI\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _ensureOverflowUI body');
+            const body = methodMatch[1];
+            assert.ok(
+                !body.includes('AppletPopupMenu'),
+                '_ensureOverflowUI must not use AppletPopupMenu (causes DND conflict via pushModal)'
+            );
+        });
+
+        it('adds overflow panel to Main.uiGroup', () => {
+            const methodMatch = appletSource.match(
+                /_ensureOverflowUI\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _ensureOverflowUI body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('Main.uiGroup'),
+                '_ensureOverflowUI must add overflow panel to Main.uiGroup'
+            );
+        });
+
+        it('uses captured-event for click-outside (no pushModal)', () => {
+            assert.ok(
+                appletSource.includes('captured-event'),
+                'must use captured-event on global.stage for click-outside detection'
+            );
+            // _ensureOverflowUI and open/close should NOT use pushModal
+            assert.ok(
+                !appletSource.includes('pushModal'),
+                'must not use pushModal (conflicts with DND)'
+            );
+        });
+
+        it('adds chevron to this.actor (not myactor)', () => {
+            const methodMatch = appletSource.match(
+                /_ensureOverflowUI\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _ensureOverflowUI body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('this.actor.add'),
+                '_ensureOverflowUI must add chevron to this.actor (applet-box), not myactor'
+            );
+        });
+
+        it('has _redistributeLaunchers method', () => {
+            assert.ok(
+                appletSource.includes('_redistributeLaunchers'),
+                'must have _redistributeLaunchers method'
+            );
+        });
+
+        it('has _destroyOverflowUI method', () => {
+            assert.ok(
+                appletSource.includes('_destroyOverflowUI'),
+                'must have _destroyOverflowUI method'
+            );
+        });
+
+        it('has _closeOverflowPanel method', () => {
+            assert.ok(
+                appletSource.includes('_closeOverflowPanel'),
+                'must have _closeOverflowPanel for dismissing overflow'
+            );
+        });
+
+        it('has _calcOverflowPanelPosition method', () => {
+            assert.ok(
+                appletSource.includes('_calcOverflowPanelPosition'),
+                'must have _calcOverflowPanelPosition for positioning on uiGroup'
             );
         });
     });
