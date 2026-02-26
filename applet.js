@@ -22,6 +22,10 @@ const Helpers = require('./helpers');
 const PANEL_EDIT_MODE_KEY = 'panel-edit-mode';
 const PANEL_LAUNCHERS_KEY = 'panel-launchers';
 
+const COLUMN_SPACING = 2;          // FlowLayout column spacing (pixels)
+const OVERFLOW_GRID_SPACING = 4;   // Overflow grid column/row spacing (pixels)
+const OVERFLOW_GRID_COLS = 5;      // Columns in the overflow popup grid
+
 const CUSTOM_LAUNCHERS_PATH = GLib.get_user_data_dir() + "/cinnamon/panel-launchers/";
 const OLD_CUSTOM_LAUNCHERS_PATH = GLib.get_home_dir() + '/.cinnamon/panel-launchers/';
 
@@ -353,7 +357,7 @@ class LaunchersBox {
             manager = new Clutter.FlowLayout({
                 orientation: Clutter.FlowOrientation.HORIZONTAL,
                 homogeneous: true,
-                column_spacing: 2,
+                column_spacing: COLUMN_SPACING,
                 row_spacing: 0
             });
         } else {
@@ -497,8 +501,9 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._inAllocationUpdate = false;
 
         // Overflow popup state (horizontal panels only, when max-width clips launchers)
-        this._overflowPanel = null;         // St.Bin on Main.uiGroup
+        this._overflowPanel = null;         // St.Bin on global.stage
         this._overflowPanelOpen = false;    // manual open/close tracking
+        this._overflowModalPushed = false;  // pushModal active for input routing
         this._capturedEventId = 0;          // for click-outside handler
         this._overflowGrid = null;          // Clutter.Actor with FlowLayout
         this._overflowIndicator = null;     // St.Button (chevron, child of this.actor)
@@ -506,7 +511,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
         this.actor.add(this.myactor);
         this.actor.reactive = global.settings.get_boolean(PANEL_EDIT_MODE_KEY);
-        global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._onPanelEditModeChanged));
+        this.signals.connect(global.settings, 'changed::' + PANEL_EDIT_MODE_KEY, this._onPanelEditModeChanged, this);
 
         // FlowLayout needs a width constraint to trigger wrapping.
         if (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM) {
@@ -557,7 +562,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
 
         let cellW = this._getCellWidth();
-        let spacing = 2; // column_spacing
+        let spacing = COLUMN_SPACING;
         let maxWidth = this.maxWidth || 0;
         let desiredW = Helpers.calcContainerWidth(count, this.maxRows, cellW, spacing, maxWidth);
 
@@ -606,15 +611,14 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let gridManager = new Clutter.FlowLayout({
             orientation: Clutter.FlowOrientation.HORIZONTAL,
             homogeneous: true,
-            column_spacing: 4,
-            row_spacing: 4
+            column_spacing: OVERFLOW_GRID_SPACING,
+            row_spacing: OVERFLOW_GRID_SPACING
         });
         this._overflowGrid = new Clutter.Actor({
             layout_manager: gridManager,
             clip_to_allocation: true
         });
-        // Set grid width: 5 columns of icons
-        let gridWidth = 5 * cellW + 4 * 4;
+        let gridWidth = OVERFLOW_GRID_COLS * cellW + (OVERFLOW_GRID_COLS - 1) * OVERFLOW_GRID_SPACING;
         this._overflowGrid.set_width(gridWidth);
 
         // DND delegate for reordering within the overflow popup
@@ -663,8 +667,12 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             }
         };
 
-        // Standalone overflow panel on Main.uiGroup — no modal grab,
-        // so DND works while the panel is open.
+        // Standalone overflow panel on global.stage (topmost paint layer).
+        // Placed on the stage so it paints above global.top_window_group
+        // (which contains "always on top" windows that occlude Main.uiGroup
+        // in Clutter's pick pass, blocking hover/click events).
+        // pushModal (in _openOverflowPanel) routes ALL input through the
+        // Clutter stage in FULLSCREEN mode — no addChrome needed.
         this._overflowPanel = new St.Bin({
             style_class: 'menu',
             style: 'border: 1px solid rgba(255,255,255,0.3); padding: 4px;',
@@ -674,13 +682,13 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         });
         this._overflowPanel._delegate = this._overflowGrid._delegate;
         this._overflowPanel.set_child(this._overflowGrid);
-        Main.uiGroup.add_child(this._overflowPanel);
+        global.stage.add_child(this._overflowPanel);
     }
 
     _destroyOverflowUI() {
         if (this._overflowPanelOpen) this._closeOverflowPanel();
         if (this._overflowPanel) {
-            Main.uiGroup.remove_child(this._overflowPanel);
+            global.stage.remove_child(this._overflowPanel);
             this._overflowPanel.destroy();
             this._overflowPanel = null;
         }
@@ -710,8 +718,8 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._overflowPanelOpen = true;
 
         // Constrain panel to its preferred size before showing.
-        // Main.uiGroup uses NO_LAYOUT which allocates natural size for
-        // unconstrained width — causing the St.Bin to be too tall.
+        // The stage allocates full screen size — set explicit size
+        // to avoid allocation stretching the St.Bin.
         let [, pw] = this._overflowPanel.get_preferred_width(-1);
         let [, ph] = this._overflowPanel.get_preferred_height(pw);
         this._overflowPanel.set_width(pw);
@@ -728,6 +736,11 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             if (icon) icon.icon_name = 'pan-up-symbolic';
         }
 
+        // pushModal routes ALL input through the Clutter stage so our
+        // captured-event handler sees clicks on application windows too.
+        // DND calls pushModal separately — both nest (modalCount increments).
+        this._overflowModalPushed = Main.pushModal(this._overflowPanel);
+
         // Click-outside / Escape detection via captured-event on global.stage
         this._capturedEventId = global.stage.connect('captured-event',
             (stage, event) => this._onOverflowCapturedEvent(event));
@@ -736,6 +749,17 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     _closeOverflowPanel() {
         if (!this._overflowPanel) return;
 
+        // Disconnect captured-event BEFORE popModal to avoid stale handler
+        if (this._capturedEventId) {
+            global.stage.disconnect(this._capturedEventId);
+            this._capturedEventId = 0;
+        }
+
+        if (this._overflowModalPushed) {
+            Main.popModal(this._overflowPanel);
+            this._overflowModalPushed = false;
+        }
+
         this._overflowPanel.hide();
         this._overflowPanelOpen = false;
 
@@ -743,12 +767,6 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         if (this._overflowIndicator) {
             let icon = this._overflowIndicator.get_child();
             if (icon) icon.icon_name = 'pan-down-symbolic';
-        }
-
-        // Disconnect captured-event handler
-        if (this._capturedEventId) {
-            global.stage.disconnect(this._capturedEventId);
-            this._capturedEventId = 0;
         }
     }
 
@@ -839,9 +857,9 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         return visible;
     }
 
-    _connectOverflowHover(launcher) {
+    _connectHoverFeedback(launcher) {
         let actor = launcher.actor;
-        if (actor._overflowHoverIds) return; // already connected
+        if (actor._hoverFeedbackIds) return; // already connected
         let enterId = actor.connect('enter-event', () => {
             actor.set_style('border: 1px solid rgba(255,255,255,0.5); border-radius: 4px;');
         });
@@ -854,14 +872,14 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let releaseId = actor.connect('button-release-event', () => {
             actor.set_style('');
         });
-        actor._overflowHoverIds = [enterId, leaveId, pressId, releaseId];
+        actor._hoverFeedbackIds = [enterId, leaveId, pressId, releaseId];
     }
 
-    _disconnectOverflowHover(launcher) {
+    _disconnectHoverFeedback(launcher) {
         let actor = launcher.actor;
-        if (!actor._overflowHoverIds) return;
-        for (let id of actor._overflowHoverIds) actor.disconnect(id);
-        actor._overflowHoverIds = null;
+        if (!actor._hoverFeedbackIds) return;
+        for (let id of actor._hoverFeedbackIds) actor.disconnect(id);
+        actor._hoverFeedbackIds = null;
         actor.set_style('');
     }
 
@@ -872,7 +890,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             // No overflow needed — all launchers in panel
             // Reparent any overflow launchers back to myactor
             for (let i = 0; i < this._launchers.length; i++) {
-                this._disconnectOverflowHover(this._launchers[i]);
+                this._connectHoverFeedback(this._launchers[i]);
                 let actor = this._launchers[i].actor;
                 let parent = actor.get_parent();
                 if (parent !== this.myactor) {
@@ -888,7 +906,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
             // Launchers [0, splitIndex) → panel
             for (let i = 0; i < splitIndex; i++) {
-                this._disconnectOverflowHover(this._launchers[i]);
+                this._connectHoverFeedback(this._launchers[i]);
                 let actor = this._launchers[i].actor;
                 let parent = actor.get_parent();
                 if (parent !== this.myactor) {
@@ -899,7 +917,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
             // Launchers [splitIndex, length) → overflow grid
             for (let i = splitIndex; i < this._launchers.length; i++) {
-                this._connectOverflowHover(this._launchers[i]);
+                this._connectHoverFeedback(this._launchers[i]);
                 let actor = this._launchers[i].actor;
                 let parent = actor.get_parent();
                 if (parent !== this._overflowGrid) {
@@ -1020,7 +1038,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             let manager = new Clutter.FlowLayout({
                 orientation: Clutter.FlowOrientation.HORIZONTAL,
                 homogeneous: true,
-                column_spacing: 2,
+                column_spacing: COLUMN_SPACING,
                 row_spacing: 0
             });
             this.launchersBox.manager = manager;

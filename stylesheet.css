@@ -1,4 +1,3 @@
-/* Overflow popup launcher styles.
- * Hover/active feedback is applied via inline styles in applet.js
- * (_connectOverflowHover) because launcher actors use important:true
+/* Hover/active feedback is applied via inline styles in applet.js
+ * (_connectHoverFeedback) because launcher actors use important:true
  * which gives theme CSS priority over applet stylesheets. */

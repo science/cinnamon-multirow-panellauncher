@@ -59,6 +59,39 @@ describe('applet.js safety checks', () => {
         });
     });
 
+    describe('metadata.json', () => {
+        it('does not have forbidden "icon" field', () => {
+            assert.ok(
+                !('icon' in metadata),
+                'metadata.json must not have "icon" field (forbidden by Spices; use icon.png instead)'
+            );
+        });
+
+        it('does not have forbidden "dangerous" field', () => {
+            assert.ok(
+                !('dangerous' in metadata),
+                'metadata.json must not have "dangerous" field (forbidden by Spices)'
+            );
+        });
+
+        it('does not have forbidden "last-edited" field', () => {
+            assert.ok(
+                !('last-edited' in metadata),
+                'metadata.json must not have "last-edited" field (forbidden by Spices)'
+            );
+        });
+    });
+
+    describe('signal cleanup', () => {
+        it('routes global.settings.connect through SignalManager', () => {
+            // Bare global.settings.connect() leaks — must use this.signals.connect(global.settings, ...)
+            assert.ok(
+                !appletSource.includes("global.settings.connect("),
+                'must not use bare global.settings.connect() — route through this.signals.connect(global.settings, ...) for cleanup'
+            );
+        });
+    });
+
     describe('FlowLayout container', () => {
         it('uses Clutter.FlowLayout for horizontal panels', () => {
             assert.ok(
@@ -289,6 +322,47 @@ describe('applet.js safety checks', () => {
         });
     });
 
+    describe('hover/click feedback', () => {
+        it('has _connectHoverFeedback method (not overflow-specific)', () => {
+            assert.ok(
+                appletSource.includes('_connectHoverFeedback'),
+                'must have _connectHoverFeedback method for all launchers'
+            );
+        });
+
+        it('has _disconnectHoverFeedback method', () => {
+            assert.ok(
+                appletSource.includes('_disconnectHoverFeedback'),
+                'must have _disconnectHoverFeedback method'
+            );
+        });
+
+        it('connects hover feedback to ALL launchers in _redistributeLaunchers', () => {
+            const methodMatch = appletSource.match(
+                /_redistributeLaunchers\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _redistributeLaunchers body');
+            const body = methodMatch[1];
+            // Both branches (no-overflow and overflow) must connect hover
+            const connectCalls = (body.match(/_connectHoverFeedback/g) || []).length;
+            assert.ok(
+                connectCalls >= 2,
+                '_redistributeLaunchers must call _connectHoverFeedback in both branches (panel and overflow)'
+            );
+        });
+
+        it('does not use overflow-specific hover method names', () => {
+            assert.ok(
+                !appletSource.includes('_connectOverflowHover'),
+                'must not use old _connectOverflowHover name (hover applies to all launchers)'
+            );
+            assert.ok(
+                !appletSource.includes('_disconnectOverflowHover'),
+                'must not use old _disconnectOverflowHover name'
+            );
+        });
+    });
+
     describe('overflow popup', () => {
         it('destroys overflow UI in on_applet_removed_from_panel', () => {
             const methodMatch = appletSource.match(
@@ -315,27 +389,33 @@ describe('applet.js safety checks', () => {
             );
         });
 
-        it('adds overflow panel to Main.uiGroup', () => {
+        it('adds overflow panel to global.stage (above top_window_group)', () => {
             const methodMatch = appletSource.match(
                 /_ensureOverflowUI\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _ensureOverflowUI body');
             const body = methodMatch[1];
             assert.ok(
-                body.includes('Main.uiGroup'),
-                '_ensureOverflowUI must add overflow panel to Main.uiGroup'
+                body.includes('global.stage'),
+                '_ensureOverflowUI must add overflow panel to global.stage for correct paint/pick order'
             );
         });
 
-        it('uses captured-event for click-outside (no pushModal)', () => {
+        it('uses captured-event for click-outside detection', () => {
             assert.ok(
                 appletSource.includes('captured-event'),
                 'must use captured-event on global.stage for click-outside detection'
             );
-            // _ensureOverflowUI and open/close should NOT use pushModal
+        });
+
+        it('uses pushModal/popModal for input routing', () => {
             assert.ok(
-                !appletSource.includes('pushModal'),
-                'must not use pushModal (conflicts with DND)'
+                appletSource.includes('pushModal'),
+                'must use pushModal to route input through Clutter stage'
+            );
+            assert.ok(
+                appletSource.includes('popModal'),
+                'must use popModal when closing overflow panel'
             );
         });
 
