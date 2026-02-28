@@ -537,6 +537,24 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._reload();
     }
 
+    _saveBackup() {
+        try {
+            let backup = {
+                launcherList: this.launcherList,
+                'max-rows': this.maxRows,
+                'icon-size-override': this.iconSizeOverride,
+                'max-width': this.maxWidth,
+                'allow-dragging': this.allowDragging
+            };
+            let dir = this.settings.file.get_parent().get_path();
+            let backupPath = dir + '/panel-launchers-backup.json';
+            let contents = JSON.stringify(backup, null, 4) + '\n';
+            GLib.file_set_contents(backupPath, contents);
+        } catch (e) {
+            global.logWarning('multirow-panel-launchers: backup save failed: ' + e);
+        }
+    }
+
     _getCellWidth() {
         let cellW = this.icon_size + 4; // fallback: icon + CSS padding estimate
         if (this._launchers.length > 0) {
@@ -1085,6 +1103,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
 
         this._redistributeLaunchers();
+        this._saveBackup();
     }
 
     removeLauncher(launcher, delete_file) {

@@ -363,6 +363,63 @@ describe('applet.js safety checks', () => {
         });
     });
 
+    describe('config backup', () => {
+        it('has _saveBackup method', () => {
+            assert.ok(
+                appletSource.includes('_saveBackup'),
+                'must have _saveBackup method for config backup'
+            );
+        });
+
+        it('calls _saveBackup from _reload', () => {
+            const methodMatch = appletSource.match(
+                /_reload\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _reload body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_saveBackup'),
+                '_reload must call _saveBackup to persist config on every change'
+            );
+        });
+
+        it('writes to panel-launchers-backup.json', () => {
+            const methodMatch = appletSource.match(
+                /_saveBackup\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _saveBackup body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('panel-launchers-backup.json'),
+                '_saveBackup must write to panel-launchers-backup.json'
+            );
+        });
+
+        it('saves all key settings', () => {
+            const methodMatch = appletSource.match(
+                /_saveBackup\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _saveBackup body');
+            const body = methodMatch[1];
+            assert.ok(body.includes('launcherList'), '_saveBackup must save launcherList');
+            assert.ok(body.includes('max-rows'), '_saveBackup must save max-rows');
+            assert.ok(body.includes('icon-size-override'), '_saveBackup must save icon-size-override');
+            assert.ok(body.includes('max-width'), '_saveBackup must save max-width');
+        });
+
+        it('wraps in try/catch for safety', () => {
+            const methodMatch = appletSource.match(
+                /_saveBackup\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _saveBackup body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('try') && body.includes('catch'),
+                '_saveBackup must wrap in try/catch to avoid crashing the applet'
+            );
+        });
+    });
+
     describe('overflow popup', () => {
         it('destroys overflow UI in on_applet_removed_from_panel', () => {
             const methodMatch = appletSource.match(

@@ -19,14 +19,16 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 | `uninstall.sh` | Safe removal — strips from dconf + deletes symlink. Works from TTY if Cinnamon crashed |
 | `test/helpers.test.js` | Unit tests for helper functions (56 tests) |
 | `test/schema.test.js` | Settings schema validation tests (10 tests) |
-| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow (39 tests) |
+| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup (44 tests) |
 | `test/install-uninstall.test.js` | Sandboxed install/uninstall integration tests (20 tests) |
+| `restore-config.sh` | Restore launcher config after Cinnamon ID change (reads backup, merges into current instance) |
 
 ## Commands
 
-- **Run tests**: `npm test` (139 tests, Node.js 18+)
+- **Run tests**: `npm test` (148 tests, Node.js 18+)
 - **Install**: `./install.sh` (validates files, creates symlink, warns about stock applet conflict)
 - **Uninstall**: `./uninstall.sh` (removes from dconf + deletes symlink; safe from TTY if Cinnamon crashed)
+- **Restore config**: `./restore-config.sh` (after panel reset; `--dry-run` to preview)
 - **Restart Cinnamon**: `Alt+F2 → r → Enter` or from TTY: `DISPLAY=:0 cinnamon --replace &`
 - **Applet dir**: `~/.local/share/cinnamon/applets/multirow-panel-launchers@cinnamon`
 - **dconf key**: `/org/cinnamon/enabled-applets` (list of active applets)
