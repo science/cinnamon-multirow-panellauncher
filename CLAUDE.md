@@ -17,9 +17,10 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 | `settings-schema.json` | User-configurable settings (max-rows, icon-size-override, max-width) |
 | `install.sh` | Install with validation — checks files, Cinnamon version, creates symlink, warns about role conflicts |
 | `uninstall.sh` | Safe removal — strips from dconf + deletes symlink. Works from TTY if Cinnamon crashed |
-| `test/helpers.test.js` | Unit tests for helper functions (56 tests) |
-| `test/schema.test.js` | Settings schema validation tests (10 tests) |
-| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup (44 tests) |
+| `build-spices.sh` | Build Spices-compatible package for monorepo submission |
+| `test/helpers.test.js` | Unit tests for helper functions (70 tests) |
+| `test/schema.test.js` | Settings schema validation tests (11 tests) |
+| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup (47 tests) |
 | `test/install-uninstall.test.js` | Sandboxed install/uninstall integration tests (20 tests) |
 | `restore-config.sh` | Restore launcher config after Cinnamon ID change (reads backup, merges into current instance) |
 
@@ -36,7 +37,7 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 
 ## Architecture
 
-- `helpers.js` exports pure functions (`calcLauncherIconSize`, `calcNeededRows`, `calcContainerWidth`, `calcVisibleLauncherCount`, `calcGridDropIndex`) used by both `applet.js` and Node tests
+- `helpers.js` exports pure functions (`calcLauncherIconSize`, `calcNeededRows`, `calcContainerColumns`, `calcContainerWidth`, `calcVisibleLauncherCount`, `calcGridDropIndex`) used by both `applet.js` and Node tests
 - `applet.js` uses `require('./helpers')` for GJS, `module.exports` for Node — same file, dual runtime
 - `LaunchersBox` uses `Clutter.Actor` + `Clutter.FlowLayout` for horizontal panels, `Clutter.BoxLayout` for vertical
 - `_onAllocationChanged()` feeds allocation width to FlowLayout to trigger wrapping

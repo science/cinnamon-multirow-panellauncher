@@ -68,7 +68,7 @@ Safe to run from a TTY if Cinnamon has crashed. Removes the applet from the enab
 ### Running tests
 
 ```bash
-npm test   # 143 tests across 4 test files
+npm test   # 148 tests across 4 test files
 ```
 
 Tests cover helper function math, settings schema validation, static safety checks on applet.js (cleanup, signals, metadata, FlowLayout, DND, hover feedback, overflow architecture), and sandboxed install/uninstall integration.
@@ -86,9 +86,9 @@ install.sh             # Install with validation
 uninstall.sh           # Safe uninstall
 build-spices.sh        # Build Spices-compatible package for submission
 test/
-  helpers.test.js      # Unit tests for helper functions (56 tests)
-  schema.test.js       # Metadata + settings validation (10 tests)
-  applet-lint.test.js  # Static safety checks on applet.js (43 tests)
+  helpers.test.js      # Unit tests for helper functions (70 tests)
+  schema.test.js       # Metadata + settings validation (11 tests)
+  applet-lint.test.js  # Static safety checks on applet.js (47 tests)
   install-uninstall.test.js  # Sandboxed integration tests (20 tests)
 ```
 
