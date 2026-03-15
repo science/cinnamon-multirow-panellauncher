@@ -23,6 +23,7 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 | `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup (47 tests) |
 | `test/install-uninstall.test.js` | Sandboxed install/uninstall integration tests (20 tests) |
 | `restore-config.sh` | Restore launcher config after Cinnamon ID change (reads backup, merges into current instance) |
+| `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/panel-launchers-backup.json` | Auto-generated backup of launcher list + settings (tracked in yadm — see below) |
 
 ## Commands
 
@@ -46,6 +47,16 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 - `acceptNewLauncher()` supports Cinnamon menu's "Add to Panel" via the `panellauncher` role
 - Overflow popup: `St.Bin` on `global.stage` with `pushModal`/`popModal` for input routing; chevron is child of `this.actor` (applet-box), separate from FlowLayout/DND
 - Hover/click feedback: `_connectHoverFeedback` applies inline styles via enter/leave/button-press/button-release events on ALL launchers
+
+## Backup File and yadm Integration
+
+The applet writes `panel-launchers-backup.json` to the spices directory on every settings change. This file captures the launcher list, max-rows, icon-size, max-width, and allow-dragging settings — everything needed to restore configuration after a Cinnamon panel reset or ID change.
+
+This backup file is **tracked in yadm** (the dotfiles manager). This is intentional: it represents the user's current preferred panel launcher setup, and tracking it in yadm ensures all workstations get the same MRPL configuration. When the launcher list changes (add/remove apps, reorder), the backup file updates automatically and should be committed to yadm.
+
+- **Backup written by**: `applet.js` → `_saveBackup()` on every settings change
+- **Backup consumed by**: `restore-config.sh` to merge into a new Cinnamon instance ID
+- **yadm path**: `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/panel-launchers-backup.json`
 
 ## Known Constraints (Cinnamon 6.0.4)
 

@@ -53,7 +53,8 @@ Right-click the applet → Configure:
 - Set **max-width** to constrain how much panel space the launchers use. A chevron appears when icons overflow, opening a popup grid on click.
 - Set **max rows = 1** for a single-row layout that matches the stock applet but adds overflow support.
 - **Icon size override = 0** (the default) auto-scales icons to `floor(panelHeight / rows) - 4` pixels. Override for a fixed size.
-- The applet's runtime config (launcher list + settings) is stored at `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/<panel-id>.json`. Back this up if you want to preserve your launcher list across reinstalls.
+- The applet's runtime config (launcher list + settings) is stored at `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/<panel-id>.json`.
+- The applet automatically writes a `panel-launchers-backup.json` alongside the instance config on every settings change. This backup is instance-ID-independent and can be restored via `./restore-config.sh` after a panel reset. If you use a dotfiles manager (e.g. yadm), tracking this backup file keeps your launcher configuration consistent across machines.
 
 ## Uninstallation
 
