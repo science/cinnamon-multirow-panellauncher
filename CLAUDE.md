@@ -74,6 +74,50 @@ This backup file is **tracked in yadm** (the dotfiles manager). This is intentio
 - `launcher.actor` uses `important: true` — theme CSS overrides stylesheet.css, so hover effects must use inline `set_style()` rather than CSS pseudo-classes
 - `_updateIconSize` in `PanelAppLauncher` only ratchets the icon DOWN (never up). If the iconBox is ever allocated at h≈0 the icon is clamped permanently — recovery requires a fresh `icon.set_icon_size()` call via `on_panel_height_changed`. Keep the container width sized so FlowLayout never allocates children at h=0.
 
+## Dev / Deploy Architecture (VM + Host)
+
+The repo lives on the host; the VM accesses it via a virtiofs bind mount. **Only the source tree is shared — each machine has its own `~/.local/share/cinnamon/applets/`** so they can run different installs independently.
+
+### What's shared vs not
+
+| Path | VM | Host | Shared? |
+|------|----|------|---------|
+| `~/dev/cinnamon-multirow-panellauncher/` | ✓ | ✓ | **virtiofs** (incus `incus_devmount`). Edit on either side → both see it. |
+| `~/.claude/` | ✓ | ✓ | virtiofs (`incus_claudemount`) |
+| `~/Pictures/` | ✓ | ✓ | virtiofs (`incus_picsmount`) |
+| `~/.local/share/cinnamon/applets/` | ✓ | ✓ | **NOT shared** — each machine independent |
+| `~/.config/cinnamon/spices/` | ✓ | ✓ | **NOT shared** (but `panel-launchers-backup.json` is yadm-tracked) |
+| `/org/cinnamon/enabled-applets` (dconf) | ✓ | ✓ | **NOT shared** |
+
+Verify the VM mounts with `findmnt -t virtiofs`.
+
+### Two install modes, by machine
+
+| Command | Applet dir points at | Effect of `~/dev` edits on running applet |
+|---------|---------------------|-------------------------------------------|
+| `./install.sh dev` | `~/dev/cinnamon-multirow-panellauncher/` (symlink) | **Live** — next Cinnamon restart picks up WIP |
+| `./deploy.sh` | `~/.local/share/cinnamon/applets/<UUID>.stable/` (rsync'd snapshot) | **Isolated** — no effect until `./deploy.sh` runs again |
+
+**Intended usage:**
+- **On the VM** → `./install.sh dev`. Source changes go live every Cinnamon restart. This is the debugging loop.
+- **On the host** → `./deploy.sh`. Host Cinnamon runs a frozen copy, insulated from in-progress edits happening in the VM.
+
+Because `~/dev` is shared but the applet dirs aren't, this split works: edits made in the VM land in the host repo too, but the host's running applet stays on the `.stable/` snapshot until you explicitly `./deploy.sh` on the host.
+
+**Pitfall**: running `./install.sh dev` on the **host** breaks the isolation — the host's applet dir then symlinks to shared `~/dev`, so every save in the VM hits host production immediately. The scripts don't enforce this separation; convention does.
+
+### Rolling back production
+
+If a WIP edit is breaking the host's running applet, re-run `./deploy.sh` on the host at the last known-good commit:
+
+```bash
+cd ~/dev/cinnamon-multirow-panellauncher
+git stash          # park WIP
+./deploy.sh        # snapshot committed HEAD into <UUID>.stable/
+# Alt+F2 → r       # reload Cinnamon on host
+git stash pop      # continue WIP (VM picks it up on next Cinnamon restart)
+```
+
 ## VM Testing
 
 A libvirt/KVM VM (`cinnamon-dev`) mirrors the host environment (Ubuntu 24.04 + Cinnamon 6.0.4). The host `~/dev` is mounted read-write at `/mnt/host-dev/` via virtio-fs — code changes are instantly visible to the VM.
