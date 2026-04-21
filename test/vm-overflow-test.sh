@@ -1249,6 +1249,150 @@ test_overflow_destroyed_when_maxwidth_removed() {
 }
 
 # ═══════════════════════════════════════════════════════
+#  TEST SUITE 8: Self-heal watchdog
+# ═══════════════════════════════════════════════════════
+
+test_watchdog_methods_present() {
+    echo -e "${BOLD}Test: Watchdog methods exist on the applet${NC}"
+    local check
+    check=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        let ok = typeof app._scheduleVerify === 'function' &&
+                 typeof app._verifyLayout === 'function';
+        'hasMethods=' + ok +
+        ' verifySourceId=' + (typeof app._verifySourceId) +
+        ' healing=' + (typeof app._healing) +
+        ' retries=' + (typeof app._verifyRetries)
+    ")
+    if echo "$check" | grep -q "hasMethods=true"; then
+        test_result "Watchdog methods present" "pass" "$check"
+    else
+        test_result "Watchdog methods present" "fail" "$check"
+    fi
+    echo ""
+}
+
+test_heal_restores_wrong_icon_size() {
+    echo -e "${BOLD}Test: Watchdog restores icon_size after forced mismatch${NC}"
+    reset_settings
+    set_launcher_count 5
+    sleep "$SETTLE_TIME"
+
+    # Capture the correct value, forcibly break it, run the verify, re-read.
+    local result
+    result=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        let before = app.icon_size;
+        app.icon_size = 999;
+        app._verifyLayout();
+        let after = app.icon_size;
+        'before=' + before + ' forced=999 after=' + after + ' restored=' + (after === before)
+    ")
+    if echo "$result" | grep -q "restored=true"; then
+        test_result "Icon size restored by _verifyLayout" "pass" "$result"
+    else
+        test_result "Icon size restored by _verifyLayout" "fail" "$result"
+    fi
+    echo ""
+}
+
+test_heal_recreates_launchers() {
+    echo -e "${BOLD}Test: Heal path reloads launcher actors${NC}"
+    reset_settings
+    set_launcher_count 5
+    sleep "$SETTLE_TIME"
+
+    local result
+    result=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        let firstBefore = app._launchers[0];
+        app.icon_size = 999;
+        app._verifyLayout();
+        let firstAfter = app._launchers[0];
+        let recreated = firstBefore !== firstAfter;
+        let count = app._launchers.length;
+        'recreated=' + recreated + ' count=' + count
+    ")
+    if echo "$result" | grep -q "recreated=true"; then
+        test_result "Launcher actors recreated on icon-size heal" "pass" "$result"
+    else
+        test_result "Launcher actors recreated on icon-size heal" "fail" "$result"
+    fi
+    echo ""
+}
+
+test_watchdog_source_tracking() {
+    echo -e "${BOLD}Test: Watchdog idle source tracked and cleared${NC}"
+    reset_settings
+    set_launcher_count 5
+    sleep "$SETTLE_TIME"
+
+    # Right after a settings change, _scheduleVerify should have set the source
+    # ID. After the idle fires, it should be cleared back to 0.
+    local result
+    result=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        app._scheduleVerify();
+        let duringSchedule = app._verifySourceId;
+        // Force the idle to run synchronously by calling verify directly
+        // (the runtime check: does the API clear the ID properly?)
+        'duringSchedule=' + (duringSchedule > 0)
+    ")
+    if echo "$result" | grep -q "duringSchedule=true"; then
+        test_result "Verify source ID tracked after _scheduleVerify" "pass" "$result"
+    else
+        test_result "Verify source ID tracked after _scheduleVerify" "fail" "$result"
+    fi
+
+    # Wait a beat for the idle to actually run
+    sleep 1
+    local cleared
+    cleared=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        'cleared=' + (app._verifySourceId === 0)
+    ")
+    if echo "$cleared" | grep -q "cleared=true"; then
+        test_result "Verify source ID cleared after idle fires" "pass" "$cleared"
+    else
+        test_result "Verify source ID cleared after idle fires" "fail" "$cleared"
+    fi
+    echo ""
+}
+
+test_post_startup_layout_is_consistent() {
+    echo -e "${BOLD}Test: Post-startup icon_size matches expected${NC}"
+    reset_settings
+    set_launcher_count 10
+    sleep "$SETTLE_TIME"
+
+    local result
+    result=$(cinnamon_eval "
+        let mgr = imports.ui.appletManager;
+        let app = mgr.getRunningInstancesForUuid(\"$APPLET_UUID\")[0];
+        let h = app._panelHeight || 0;
+        let rows = app.maxRows || 2;
+        let override = app.iconSizeOverride || 0;
+        let expected;
+        if (override > 0) expected = override;
+        else if (h > 0) expected = Math.max(12, Math.floor(h / rows) - 4);
+        else expected = app.icon_size;  // pre-allocation fallback path — skip assertion
+        'h=' + h + ' rows=' + rows + ' expected=' + expected + ' actual=' + app.icon_size +
+        ' match=' + (expected === app.icon_size)
+    ")
+    if echo "$result" | grep -q "match=true"; then
+        test_result "Steady-state icon_size matches expected" "pass" "$result"
+    else
+        test_result "Steady-state icon_size matches expected" "fail" "$result"
+    fi
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════
 #  TEST SUITE 7: Error checking
 # ═══════════════════════════════════════════════════════
 
@@ -1368,6 +1512,15 @@ main() {
     echo ""
     test_overflow_destroyed_on_orientation_change
     test_overflow_destroyed_when_maxwidth_removed
+
+    # Suite 8: Self-heal watchdog
+    echo -e "${BOLD}═══ Suite 8: Self-heal watchdog ═══${NC}"
+    echo ""
+    test_watchdog_methods_present
+    test_post_startup_layout_is_consistent
+    test_heal_restores_wrong_icon_size
+    test_heal_recreates_launchers
+    test_watchdog_source_tracking
 
     # Suite 7: Error checking
     echo -e "${BOLD}═══ Suite 7: Error checking ═══${NC}"

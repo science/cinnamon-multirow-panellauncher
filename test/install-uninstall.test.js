@@ -61,10 +61,11 @@ fi
     };
 }
 
-function runScript(scriptName, env) {
+function runScript(scriptName, env, args = '') {
     const script = path.join(PROJECT_DIR, scriptName);
+    const argPart = args ? ` ${args}` : '';
     try {
-        const output = execSync(`bash "${script}" 2>&1`, {
+        const output = execSync(`bash "${script}"${argPart} 2>&1`, {
             env: { ...process.env, ...env },
             cwd: PROJECT_DIR,
             timeout: 10000,
@@ -73,6 +74,11 @@ function runScript(scriptName, env) {
     } catch (e) {
         return { code: e.status, output: (e.stdout || '').toString() + (e.stderr || '').toString() };
     }
+}
+
+// install.sh requires a mode arg (currently only 'dev'); tests always use dev.
+function runInstall(env) {
+    return runScript('install.sh', env, 'dev');
 }
 
 describe('install.sh', { concurrency: 1 }, () => {
@@ -87,7 +93,7 @@ describe('install.sh', { concurrency: 1 }, () => {
     });
 
     it('creates symlink into applet directory', () => {
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.equal(result.code, 0, `install.sh failed: ${result.output}`);
 
         const appletDir = path.join(sb.appletParent, UUID);
@@ -96,23 +102,23 @@ describe('install.sh', { concurrency: 1 }, () => {
     });
 
     it('reports Cinnamon version', () => {
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.match(result.output, /Cinnamon version: 6\.0\.4/);
     });
 
     it('reports required files OK', () => {
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.match(result.output, /Required files: OK/);
     });
 
     it('reports metadata UUID OK', () => {
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.match(result.output, /Metadata UUID: OK/);
     });
 
     it('is idempotent — skips if symlink already points to repo', () => {
-        runScript('install.sh', sb.env);
-        const result = runScript('install.sh', sb.env);
+        runInstall(sb.env);
+        const result = runInstall(sb.env);
         assert.equal(result.code, 0);
         assert.match(result.output, /already exists and points to this repo/);
     });
@@ -121,7 +127,7 @@ describe('install.sh', { concurrency: 1 }, () => {
         fs.writeFileSync(sb.dconfStore,
             `['panel1:center:0:${STOCK_UUID}:2']`);
 
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.equal(result.code, 0);
         assert.match(result.output, /Stock panel-launchers/);
         assert.match(result.output, /panellauncher/);
@@ -130,7 +136,7 @@ describe('install.sh', { concurrency: 1 }, () => {
     it('does not warn about stock panel-launchers if absent from dconf', () => {
         fs.writeFileSync(sb.dconfStore, `[]`);
 
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.equal(result.code, 0);
         assert.ok(!result.output.includes('Stock panel-launchers'),
             'Should not warn when stock applet is absent');
@@ -147,7 +153,7 @@ describe('install.sh', { concurrency: 1 }, () => {
         }
         fs.copyFileSync(path.join(sb.mockBin, 'dconf'), path.join(cleanBin, 'dconf'));
         const env = { ...sb.env, PATH: cleanBin };
-        const result = runScript('install.sh', env);
+        const result = runScript('install.sh', env, 'dev');
         assert.notEqual(result.code, 0);
         assert.match(result.output, /cinnamon not found/);
     });
@@ -156,7 +162,7 @@ describe('install.sh', { concurrency: 1 }, () => {
         const appletDir = path.join(sb.appletParent, UUID);
         fs.symlinkSync('/tmp/wrong-target', appletDir);
 
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.equal(result.code, 0);
         assert.match(result.output, /Removing old symlink/);
         assert.equal(fs.readlinkSync(appletDir), PROJECT_DIR);
@@ -166,13 +172,13 @@ describe('install.sh', { concurrency: 1 }, () => {
         const appletDir = path.join(sb.appletParent, UUID);
         fs.mkdirSync(appletDir, { recursive: true });
 
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.notEqual(result.code, 0);
         assert.match(result.output, /Directory install exists/);
     });
 
     it('prints uninstall reminder', () => {
-        const result = runScript('install.sh', sb.env);
+        const result = runInstall(sb.env);
         assert.match(result.output, /uninstall\.sh/);
     });
 });
@@ -291,7 +297,7 @@ describe('install + uninstall round-trip', { concurrency: 1 }, () => {
     it('install then uninstall leaves a clean state', () => {
         const appletDir = path.join(sb.appletParent, UUID);
 
-        const installResult = runScript('install.sh', sb.env);
+        const installResult = runInstall(sb.env);
         assert.equal(installResult.code, 0);
         assert.ok(fs.existsSync(appletDir), 'Should exist after install');
 
@@ -301,7 +307,7 @@ describe('install + uninstall round-trip', { concurrency: 1 }, () => {
     });
 
     it('double uninstall is safe', () => {
-        runScript('install.sh', sb.env);
+        runInstall(sb.env);
         runScript('uninstall.sh', sb.env);
 
         const result = runScript('uninstall.sh', sb.env);

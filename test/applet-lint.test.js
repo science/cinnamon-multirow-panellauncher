@@ -229,10 +229,12 @@ describe('applet.js safety checks', () => {
             );
         });
 
-        it('calls calcLauncherIconSize', () => {
+        it('uses helpers for icon sizing', () => {
+            // Either direct call to calcLauncherIconSize or via calcIconSizeWithFallback
             assert.ok(
-                appletSource.includes('calcLauncherIconSize'),
-                'must use calcLauncherIconSize from helpers'
+                appletSource.includes('calcLauncherIconSize') ||
+                appletSource.includes('calcIconSizeWithFallback'),
+                'must use calcLauncherIconSize or calcIconSizeWithFallback from helpers'
             );
         });
 
@@ -240,6 +242,249 @@ describe('applet.js safety checks', () => {
             assert.ok(
                 appletSource.includes('calcContainerWidth'),
                 'must use calcContainerWidth from helpers for container width'
+            );
+        });
+    });
+
+    describe('watchdog lifecycle hooks', () => {
+        it('_reload schedules a verify pass at the tail', () => {
+            const methodMatch = appletSource.match(
+                /_reload\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _reload body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_scheduleVerify'),
+                '_reload must call _scheduleVerify so the watchdog runs after each reload'
+            );
+        });
+
+        it('on_applet_removed_from_panel cancels any pending verify source', () => {
+            const methodMatch = appletSource.match(
+                /on_applet_removed_from_panel\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_verifySourceId'),
+                'cleanup must reference _verifySourceId to release the idle source'
+            );
+            assert.ok(
+                body.includes('GLib.source_remove'),
+                'cleanup must call GLib.source_remove on any pending watchdog idle'
+            );
+        });
+    });
+
+    describe('verify-and-heal watchdog', () => {
+        it('has _scheduleVerify method', () => {
+            assert.ok(
+                /_scheduleVerify\s*\(\)\s*\{/.test(appletSource),
+                'must define _scheduleVerify() to queue a post-layout check'
+            );
+        });
+
+        it('_scheduleVerify uses GLib.idle_add with PRIORITY_LOW', () => {
+            const methodMatch = appletSource.match(
+                /_scheduleVerify\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _scheduleVerify body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('GLib.idle_add'),
+                '_scheduleVerify must use GLib.idle_add to run after Clutter layout'
+            );
+            assert.ok(
+                body.includes('GLib.PRIORITY_LOW'),
+                '_scheduleVerify must use PRIORITY_LOW so it fires after style-changed propagation'
+            );
+        });
+
+        it('_scheduleVerify cancels any pending previous source', () => {
+            const methodMatch = appletSource.match(
+                /_scheduleVerify\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('GLib.source_remove'),
+                '_scheduleVerify must cancel any pending verify source before scheduling a new one'
+            );
+            assert.ok(
+                body.includes('_verifySourceId'),
+                '_scheduleVerify must track the source ID on this._verifySourceId'
+            );
+        });
+
+        it('_scheduleVerify returns GLib.SOURCE_REMOVE from the idle callback', () => {
+            const methodMatch = appletSource.match(
+                /_scheduleVerify\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('GLib.SOURCE_REMOVE'),
+                '_scheduleVerify idle callback must return GLib.SOURCE_REMOVE for one-shot behavior'
+            );
+        });
+
+        it('has _verifyLayout method', () => {
+            assert.ok(
+                /_verifyLayout\s*\(\)\s*\{/.test(appletSource),
+                'must define _verifyLayout() for the heal check'
+            );
+        });
+
+        it('_verifyLayout has a re-entry guard', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _verifyLayout body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_healing'),
+                '_verifyLayout must check a _healing flag to avoid re-entry during heal'
+            );
+        });
+
+        it('_verifyLayout caps CSS-not-resolved retries', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_verifyRetries'),
+                '_verifyLayout must cap retries via _verifyRetries to prevent oscillation'
+            );
+        });
+
+        it('_verifyLayout computes expected icon size via helpers', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('calcIconSizeWithFallback') || body.includes('calcLauncherIconSize'),
+                '_verifyLayout must compute expected icon size via helpers (for mismatch detection)'
+            );
+        });
+
+        it('_verifyLayout can trigger full heal via _recalcIconSize + _reload', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_recalcIconSize'),
+                '_verifyLayout must call _recalcIconSize on icon-size mismatch'
+            );
+            assert.ok(
+                body.includes('_reload'),
+                '_verifyLayout must call _reload on icon-size mismatch (recreates launchers)'
+            );
+        });
+
+        it('_verifyLayout re-runs _updateContainerWidth for the width-only case', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('_updateContainerWidth'),
+                '_verifyLayout must call _updateContainerWidth when only width is stale'
+            );
+        });
+    });
+
+    describe('_getCellWidth never-starve contract', () => {
+        // Regression lock: the WIP sentinel-and-bail approach (return 0 when
+        // natW < icon_size + 2; _updateContainerWidth bails on cellW <= 0)
+        // starved FlowLayout → iconBox allocated at h≈0 → _updateIconSize
+        // ratcheted the icon down to 1px. Fix delegates to Helpers.pickCellWidth
+        // which always returns a positive value when launchers exist.
+        it('_getCellWidth delegates to Helpers.pickCellWidth', () => {
+            const methodMatch = appletSource.match(
+                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _getCellWidth body');
+            const body = methodMatch[1];
+            assert.ok(
+                /Helpers\.pickCellWidth/.test(body),
+                '_getCellWidth must delegate to Helpers.pickCellWidth so the fallback is always positive'
+            );
+        });
+
+        it('_getCellWidth does not return 0 when launchers exist', () => {
+            const methodMatch = appletSource.match(
+                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            // Only legal `return 0` is the no-launchers short-circuit.
+            const returnZeros = body.match(/return\s+0/g) || [];
+            assert.ok(
+                returnZeros.length <= 1,
+                '_getCellWidth must have at most one `return 0` (the no-launchers guard)'
+            );
+            assert.ok(
+                !/natW\s*<\s*this\.icon_size\s*\+\s*2/.test(body),
+                '_getCellWidth must not reintroduce the (natW < icon_size + 2) sentinel — that path led to the starvation cascade'
+            );
+        });
+
+        it('_updateContainerWidth does not bail for the "CSS unresolved" case', () => {
+            const methodMatch = appletSource.match(
+                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _updateContainerWidth body');
+            const body = methodMatch[1];
+            // cellW<=0 guard is still OK for the no-launchers case, but the
+            // body must always end up calling set_width on the normal path.
+            assert.ok(
+                /set_width/.test(body),
+                '_updateContainerWidth must call set_width on the normal path'
+            );
+        });
+    });
+
+    describe('_recalcIconSize fallback chain', () => {
+        it('uses calcIconSizeWithFallback helper', () => {
+            const methodMatch = appletSource.match(
+                /_recalcIconSize\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _recalcIconSize body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('calcIconSizeWithFallback'),
+                '_recalcIconSize must delegate to Helpers.calcIconSizeWithFallback'
+            );
+        });
+
+        it('reads the panel zone icon size via getPanelIconSize', () => {
+            const methodMatch = appletSource.match(
+                /_recalcIconSize\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('getPanelIconSize'),
+                '_recalcIconSize must read getPanelIconSize for zone-size fallback'
+            );
+        });
+
+        it('does not fall back to literal 25', () => {
+            const methodMatch = appletSource.match(
+                /_recalcIconSize\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                !body.includes('|| 25'),
+                '_recalcIconSize must not use the "|| 25" fallback (use getPanelIconSize instead)'
             );
         });
     });

@@ -15,20 +15,25 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 | `helpers.js` | Pure computation functions (no GJS deps, testable in Node) |
 | `metadata.json` | Applet UUID, name, role |
 | `settings-schema.json` | User-configurable settings (max-rows, icon-size-override, max-width) |
-| `install.sh` | Install with validation — checks files, Cinnamon version, creates symlink, warns about role conflicts |
+| `install.sh` | Dev-mode install — `./install.sh dev` points Cinnamon applet symlink at this repo (live edits). No-param errors with usage. |
+| `deploy.sh` | Promote repo → stable — rsyncs repo into `<UUID>.stable/` and flips symlink there. Repo edits no longer affect running applet until re-deploy. |
 | `uninstall.sh` | Safe removal — strips from dconf + deletes symlink. Works from TTY if Cinnamon crashed |
 | `build-spices.sh` | Build Spices-compatible package for monorepo submission |
-| `test/helpers.test.js` | Unit tests for helper functions (70 tests) |
+| `test/helpers.test.js` | Unit tests for helper functions (89 tests) |
 | `test/schema.test.js` | Settings schema validation tests (11 tests) |
-| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup (47 tests) |
+| `test/applet-lint.test.js` | Safety checks: cleanup, signals, FlowLayout, DND, hover, overflow, backup, never-starve (65 tests) |
 | `test/install-uninstall.test.js` | Sandboxed install/uninstall integration tests (20 tests) |
+| `test/vm-layout-regression.sh` | Live D-Bus behavioral test: production-config layout (10 assertions). Runs directly on VM/host. |
+| `test/vm-overflow-test.sh` | Overflow popup VM integration suite (runs over SSH from host) |
 | `restore-config.sh` | Restore launcher config after Cinnamon ID change (reads backup, merges into current instance) |
 | `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/panel-launchers-backup.json` | Auto-generated backup of launcher list + settings (tracked in yadm — see below) |
 
 ## Commands
 
-- **Run tests**: `npm test` (148 tests, Node.js 18+)
-- **Install**: `./install.sh` (validates files, creates symlink, warns about stock applet conflict)
+- **Run tests**: `npm test` (185 tests, Node.js 18+)
+- **Run VM behavioral regression**: `./test/vm-layout-regression.sh` (run on VM/host with Cinnamon; hits D-Bus Eval)
+- **Install (dev mode)**: `./install.sh dev` — symlink points at repo; edits go live on next Cinnamon restart
+- **Deploy to stable**: `./deploy.sh` — snapshots repo into `<UUID>.stable/` and flips symlink there; repo edits stop affecting the running applet until next deploy
 - **Uninstall**: `./uninstall.sh` (removes from dconf + deletes symlink; safe from TTY if Cinnamon crashed)
 - **Restore config**: `./restore-config.sh` (after panel reset; `--dry-run` to preview)
 - **Restart Cinnamon**: `Alt+F2 → r → Enter` or from TTY: `DISPLAY=:0 cinnamon --replace &`
@@ -38,7 +43,7 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 
 ## Architecture
 
-- `helpers.js` exports pure functions (`calcLauncherIconSize`, `calcNeededRows`, `calcContainerColumns`, `calcContainerWidth`, `calcVisibleLauncherCount`, `calcGridDropIndex`) used by both `applet.js` and Node tests
+- `helpers.js` exports pure functions (`calcLauncherIconSize`, `calcNeededRows`, `calcContainerColumns`, `calcContainerWidth`, `calcVisibleLauncherCount`, `calcGridDropIndex`, `calcIconSizeWithFallback`, `pickCellWidth`) used by both `applet.js` and Node tests
 - `applet.js` uses `require('./helpers')` for GJS, `module.exports` for Node — same file, dual runtime
 - `LaunchersBox` uses `Clutter.Actor` + `Clutter.FlowLayout` for horizontal panels, `Clutter.BoxLayout` for vertical
 - `_onAllocationChanged()` feeds allocation width to FlowLayout to trigger wrapping
@@ -47,6 +52,8 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 - `acceptNewLauncher()` supports Cinnamon menu's "Add to Panel" via the `panellauncher` role
 - Overflow popup: `St.Bin` on `global.stage` with `pushModal`/`popModal` for input routing; chevron is child of `this.actor` (applet-box), separate from FlowLayout/DND
 - Hover/click feedback: `_connectHoverFeedback` applies inline styles via enter/leave/button-press/button-release events on ALL launchers
+- **Icon-size cap** (`calcIconSizeWithFallback`): the user's `icon-size-override` is treated as a preferred maximum and capped by `floor(panelHeight / numberOfRows) - ROW_PADDING_ESTIMATE` so rows always fit within the panel. Without the cap, a 48px panel with override=16 and rows=3 clips the bottom row (19 × 3 = 57 > 48).
+- **Never-starve cell width** (`pickCellWidth`): `_getCellWidth` always returns a positive value when launchers exist — either the launcher's themed preferred width or `icon_size + 4` fallback. Returning 0 caused `_updateContainerWidth` to bail, which starved FlowLayout and triggered `_updateIconSize` to ratchet the icon down to 1px.
 
 ## Backup File and yadm Integration
 
@@ -65,6 +72,7 @@ This backup file is **tracked in yadm** (the dotfiles manager). This is intentio
 - FlowLayout's `min_width` inflates to total content width — must override to 0
 - Overlay actors on `Main.uiGroup` are occluded by `global.top_window_group` in Clutter's pick pass — floating UI that needs hover/click must be placed on `global.stage` directly
 - `launcher.actor` uses `important: true` — theme CSS overrides stylesheet.css, so hover effects must use inline `set_style()` rather than CSS pseudo-classes
+- `_updateIconSize` in `PanelAppLauncher` only ratchets the icon DOWN (never up). If the iconBox is ever allocated at h≈0 the icon is clamped permanently — recovery requires a fresh `icon.set_icon_size()` call via `on_panel_height_changed`. Keep the container width sized so FlowLayout never allocates children at h=0.
 
 ## VM Testing
 

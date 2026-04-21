@@ -103,9 +103,65 @@ function calcGridDropIndex(x, y, cellWidth, cellHeight, cols, totalItems) {
     return Math.max(0, Math.min(index, totalItems));
 }
 
+// Per-row vertical padding the theme adds around each launcher icon (top+bottom).
+// Used to reserve space when capping icon size to fit panel_height/numberOfRows.
+const ROW_PADDING_ESTIMATE = 3;
+
+/**
+ * Pick an icon size using a fallback chain, capped to fit the panel vertically.
+ * Order: user override → panel-height-derived (row-aware) → panel-zone icon size → constant.
+ * The result is then clamped so `numberOfRows` rows at (icon + padding) actually fit
+ * within `panelHeight`; otherwise the bottom row is clipped by the panel edge.
+ *
+ * Zone size is a safe default on cold start when panel.height is still 0 (pre-allocation).
+ * @param {number} panelHeight - Panel height in pixels (0/undefined means unknown)
+ * @param {number} zoneIconSize - Cinnamon panel zone icon size (Applet.getPanelIconSize)
+ * @param {number} numberOfRows - Row count for the auto-scale branch
+ * @param {number} overrideSize - User override (0 = no override)
+ * @returns {number} Icon size in pixels (never 0)
+ */
+function calcIconSizeWithFallback(panelHeight, zoneIconSize, numberOfRows, overrideSize) {
+    let desired;
+    if (overrideSize > 0) desired = overrideSize;
+    else if (panelHeight > 0) desired = calcLauncherIconSize(panelHeight, numberOfRows, 0);
+    else if (zoneIconSize > 0) desired = zoneIconSize;
+    else desired = 24;
+
+    // Cap: never exceed what fits in the panel for the requested row count.
+    // If the cap kicks in, the user's override is honored as "preferred ceiling"
+    // but shrunk so rows actually render within the panel.
+    if (panelHeight > 0 && numberOfRows > 0) {
+        let maxForPanel = Math.max(8, Math.floor(panelHeight / numberOfRows) - ROW_PADDING_ESTIMATE);
+        if (desired > maxForPanel) desired = maxForPanel;
+    }
+    return desired;
+}
+
+// Minimum cell-width padding estimate used when the launcher's themed
+// width hasn't resolved yet. Keep this generous enough that the container
+// is never sized smaller than the icon — otherwise FlowLayout allocates
+// children at h=0 and _updateIconSize ratchets the icon down to 1px.
+const CELL_WIDTH_PADDING_FALLBACK = 4;
+
+/**
+ * Pick a cell-width for container sizing, choosing the themed preferred width
+ * when it's plausible and a conservative fallback otherwise. The fallback must
+ * always be >= iconSize, otherwise the container collapses and triggers a
+ * cascade that shrinks icons to 1px.
+ *
+ * @param {number} iconSize - Current applet icon size in pixels
+ * @param {number} preferredWidth - Launcher actor's natural width (get_preferred_width(-1)[1])
+ * @returns {number} Cell width in pixels (always > 0 when iconSize > 0)
+ */
+function pickCellWidth(iconSize, preferredWidth) {
+    if (iconSize <= 0) return 0;
+    if (preferredWidth >= iconSize) return preferredWidth;
+    return iconSize + CELL_WIDTH_PADDING_FALLBACK;
+}
+
 // Export for Node.js testing; ignored in GJS runtime
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        calcLauncherIconSize, calcNeededRows, calcContainerColumns, calcContainerWidth, calcVisibleLauncherCount, calcGridDropIndex
+        calcLauncherIconSize, calcNeededRows, calcContainerColumns, calcContainerWidth, calcVisibleLauncherCount, calcGridDropIndex, calcIconSizeWithFallback, pickCellWidth
     };
 }

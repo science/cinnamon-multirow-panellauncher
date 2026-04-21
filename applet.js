@@ -500,6 +500,11 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._launchers = [];
         this._inAllocationUpdate = false;
 
+        // Self-heal watchdog state (see _scheduleVerify / _verifyLayout).
+        this._verifySourceId = 0;
+        this._healing = false;
+        this._verifyRetries = 0;
+
         // Overflow popup state (horizontal panels only, when max-width clips launchers)
         this._overflowPanel = null;         // St.Bin on global.stage
         this._overflowPanelOpen = false;    // manual open/close tracking
@@ -526,10 +531,16 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     _recalcIconSize() {
-        let panelHeight = this._panelHeight || 25;
         let rows = this.maxRows || 2;
         let override = this.iconSizeOverride || 0;
-        this.icon_size = Helpers.calcLauncherIconSize(panelHeight, rows, override);
+        // panelHeight can be 0 at constructor time on cold start (panel.height
+        // is 0 until _setPanelHeight runs after AppletManager.appletsLoaded).
+        // Fall back to the panel zone icon size, which is populated
+        // synchronously during panel construction — independent of allocation.
+        let zoneSize = this.getPanelIconSize(St.IconType.FULLCOLOR) || 0;
+        this.icon_size = Helpers.calcIconSizeWithFallback(
+            this._panelHeight, zoneSize, rows, override
+        );
     }
 
     _onLayoutSettingsChanged() {
@@ -556,12 +567,14 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     _getCellWidth() {
-        let cellW = this.icon_size + 4; // fallback: icon + CSS padding estimate
-        if (this._launchers.length > 0) {
-            let [, natW] = this._launchers[0].actor.get_preferred_width(-1);
-            if (natW >= this.icon_size) cellW = natW;
-        }
-        return cellW;
+        // Always return a positive width when we have launchers — otherwise
+        // the container collapses, FlowLayout allocates children at h≈0, and
+        // _updateIconSize ratchets the icon_size down to 1px. The watchdog
+        // re-runs _updateContainerWidth after CSS resolves, so an oversized
+        // fallback gets corrected on the next pass.
+        if (this._launchers.length === 0) return 0;
+        let [, natW] = this._launchers[0].actor.get_preferred_width(-1);
+        return Helpers.pickCellWidth(this.icon_size, natW);
     }
 
     // Set the container to the content-based width so the panel zone
@@ -580,6 +593,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
 
         let cellW = this._getCellWidth();
+        if (cellW <= 0) return; // no launchers — leave width untouched
         let spacing = COLUMN_SPACING;
         let maxWidth = this.maxWidth || 0;
         let desiredW = Helpers.calcContainerWidth(count, this.maxRows, cellW, spacing, maxWidth);
@@ -598,6 +612,65 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         } finally {
             this._inAllocationUpdate = false;
         }
+    }
+
+    // Queue a post-layout verify pass. PRIORITY_LOW fires after Clutter's
+    // relayout + style-changed propagation, so reads of panel.height and
+    // launcher.get_preferred_width are accurate. Source ID is cached so
+    // rapid _reload() calls collapse to one final verify.
+    _scheduleVerify() {
+        if (this._verifySourceId) {
+            GLib.source_remove(this._verifySourceId);
+            this._verifySourceId = 0;
+        }
+        this._verifySourceId = GLib.idle_add(GLib.PRIORITY_LOW, () => {
+            this._verifySourceId = 0;
+            this._verifyLayout();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Verify that current icon_size and container width match the expected
+    // values given the panel state. Heal if they don't. Called from the idle
+    // queued by _scheduleVerify, and re-queues itself (bounded) if CSS hasn't
+    // resolved yet.
+    _verifyLayout() {
+        if (this._healing) return;
+        let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
+        if (!isHorizontal || this._launchers.length === 0) return;
+
+        // Icon-size check — covers stale _panelHeight at constructor time.
+        if (this._panelHeight > 0) {
+            let expected = Helpers.calcIconSizeWithFallback(
+                this._panelHeight,
+                this.getPanelIconSize(St.IconType.FULLCOLOR) || 0,
+                this.maxRows || 2,
+                this.iconSizeOverride || 0
+            );
+            if (expected !== this.icon_size) {
+                global.log('multirow-panel-launchers: healing icon_size ' +
+                    this.icon_size + ' → ' + expected);
+                this._healing = true;
+                try {
+                    this._recalcIconSize();
+                    this._reload();
+                } finally {
+                    this._healing = false;
+                }
+                return;
+            }
+        }
+
+        // Width check — covers stale CSS padding at _reload time.
+        let [, natW] = this._launchers[0].actor.get_preferred_width(-1);
+        if (natW < this.icon_size + 2) {
+            this._verifyRetries += 1;
+            if (this._verifyRetries < 3) this._scheduleVerify();
+            return;
+        }
+        this._verifyRetries = 0;
+
+        this._updateContainerWidth();
     }
 
     _ensureOverflowUI() {
@@ -868,8 +941,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         if (!isHorizontal) return -1;
         let maxWidth = this.maxWidth || 0;
         if (maxWidth <= 0) return -1;
+        let cellW = this._getCellWidth();
+        if (cellW <= 0) return -1; // no launchers
         let visible = Helpers.calcVisibleLauncherCount(
-            this._launchers.length, this.maxRows, this._getCellWidth(), 2, maxWidth
+            this._launchers.length, this.maxRows, cellW, 2, maxWidth
         );
         if (visible >= this._launchers.length) return -1; // all fit
         return visible;
@@ -1104,6 +1179,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
         this._redistributeLaunchers();
         this._saveBackup();
+        this._scheduleVerify();
     }
 
     removeLauncher(launcher, delete_file) {
@@ -1167,6 +1243,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     on_applet_removed_from_panel() {
+        if (this._verifySourceId) {
+            GLib.source_remove(this._verifySourceId);
+            this._verifySourceId = 0;
+        }
         this._destroyOverflowUI();
         this._launchers.forEach(l => l.destroy());
         this._launchers = [];

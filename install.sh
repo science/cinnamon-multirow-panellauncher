@@ -1,11 +1,25 @@
 #!/bin/bash
-# Install multirow-panel-launchers@cinnamon applet
+# Install multirow-panel-launchers@cinnamon applet in DEV mode
 #
-# Creates a symlink from the repo into Cinnamon's applet directory,
-# checks for conflicts with the stock panel-launchers, and validates
-# that required files are present.
+# Points the Cinnamon applet symlink at this repo so edits go live on
+# next Cinnamon restart. For deploying a stable snapshot, see deploy.sh.
 #
-# Usage: ./install.sh
+# Usage: ./install.sh dev
+
+usage() {
+    cat >&2 <<EOF
+Usage: $0 dev
+
+  dev    Point Cinnamon applet symlink at this repo (live edits).
+
+For deploying a stable snapshot to the .stable directory, use ./deploy.sh.
+EOF
+    exit 2
+}
+
+if [ "$#" -ne 1 ] || [ "$1" != "dev" ]; then
+    usage
+fi
 
 set -eo pipefail
 
@@ -15,7 +29,7 @@ APPLET_DIR="$HOME/.local/share/cinnamon/applets/$UUID"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REQUIRED_FILES=(applet.js helpers.js metadata.json settings-schema.json)
 
-echo "Installing $UUID..."
+echo "Installing $UUID (dev mode)..."
 echo ""
 
 # 1. Check Cinnamon is installed

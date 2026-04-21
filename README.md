@@ -26,10 +26,13 @@ Forked from the stock `panel-launchers@cinnamon.org` applet. Uses `Clutter.FlowL
 ```bash
 git clone https://github.com/science/cinnamon-multirow-panellauncher.git
 cd cinnamon-multirow-panellauncher
-./install.sh
+./install.sh dev        # live-edit symlink (edits go live on next Cinnamon restart)
+# or
+./deploy.sh             # rsync repo into <UUID>.stable/ and flip symlink there
+                        #   (edits stop affecting the running applet until re-deploy)
 ```
 
-The install script validates files, checks your Cinnamon version, creates a symlink, and warns if the stock panel-launchers applet is still active (both claim the `panellauncher` role — only one should be enabled at a time).
+`install.sh dev` validates files, checks your Cinnamon version, creates a symlink pointing at the repo, and warns if the stock panel-launchers applet is still active (both claim the `panellauncher` role — only one should be enabled at a time). Use `deploy.sh` instead when you want a frozen snapshot so the running applet is insulated from in-progress edits.
 
 After installing:
 1. Right-click the panel → Applets
@@ -52,7 +55,8 @@ Right-click the applet → Configure:
 **Tips:**
 - Set **max-width** to constrain how much panel space the launchers use. A chevron appears when icons overflow, opening a popup grid on click.
 - Set **max rows = 1** for a single-row layout that matches the stock applet but adds overflow support.
-- **Icon size override = 0** (the default) auto-scales icons to `floor(panelHeight / rows) - 4` pixels. Override for a fixed size.
+- **Icon size override** acts as a preferred maximum. It is capped by `floor(panelHeight / rows) - padding` so `rows` rows of (icon + padding) always fit within the panel height — otherwise the bottom row gets clipped. On a 48px panel with rows=3, a 16px override caps to 13px; on a 60px+ panel it applies as-is.
+- **Icon size override = 0** (the default) auto-scales icons to `floor(panelHeight / rows) - 4` pixels.
 - The applet's runtime config (launcher list + settings) is stored at `~/.config/cinnamon/spices/multirow-panel-launchers@cinnamon/<panel-id>.json`.
 - The applet automatically writes a `panel-launchers-backup.json` alongside the instance config on every settings change. This backup is instance-ID-independent and can be restored via `./restore-config.sh` after a panel reset. If you use a dotfiles manager (e.g. yadm), tracking this backup file keeps your launcher configuration consistent across machines.
 
@@ -69,10 +73,12 @@ Safe to run from a TTY if Cinnamon has crashed. Removes the applet from the enab
 ### Running tests
 
 ```bash
-npm test   # 148 tests across 4 test files
+npm test                            # 185 Node.js tests across 4 files
+./test/vm-layout-regression.sh      # 10 behavioral D-Bus assertions (must run on VM/host with Cinnamon)
+./test/vm-overflow-test.sh          # overflow popup integration suite (runs over SSH from host)
 ```
 
-Tests cover helper function math, settings schema validation, static safety checks on applet.js (cleanup, signals, metadata, FlowLayout, DND, hover feedback, overflow architecture), and sandboxed install/uninstall integration.
+Node tests cover helper function math, settings schema validation, static safety checks on applet.js (cleanup, signals, metadata, FlowLayout, DND, hover feedback, overflow architecture), and sandboxed install/uninstall integration. The VM layout regression test hits Cinnamon via D-Bus Eval to verify that `icon_size`, container width, rendered launcher height, and the 3×5 grid shape all match the production config — this is the regression lock for the starvation/cap bug.
 
 ### Project structure
 
@@ -83,14 +89,18 @@ metadata.json          # UUID, name, role
 settings-schema.json   # Cinnamon settings schema
 stylesheet.css         # CSS (hover uses inline styles due to important:true)
 icon.png               # Applet icon (128x128, square)
-install.sh             # Install with validation
+install.sh             # Dev-mode install (./install.sh dev symlinks the repo)
+deploy.sh              # Promote repo → stable snapshot + flip symlink
 uninstall.sh           # Safe uninstall
+restore-config.sh      # Restore launcher config after Cinnamon instance-ID change
 build-spices.sh        # Build Spices-compatible package for submission
 test/
-  helpers.test.js      # Unit tests for helper functions (70 tests)
-  schema.test.js       # Metadata + settings validation (11 tests)
-  applet-lint.test.js  # Static safety checks on applet.js (47 tests)
-  install-uninstall.test.js  # Sandboxed integration tests (20 tests)
+  helpers.test.js              # Unit tests for helper functions (89 tests)
+  schema.test.js               # Metadata + settings validation (11 tests)
+  applet-lint.test.js          # Static safety checks on applet.js (65 tests)
+  install-uninstall.test.js    # Sandboxed integration tests (20 tests)
+  vm-layout-regression.sh      # Live D-Bus behavioral test (10 assertions)
+  vm-overflow-test.sh          # Overflow popup VM integration (via SSH)
 ```
 
 ## Publishing to Cinnamon Spices

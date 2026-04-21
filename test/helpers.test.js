@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
     calcLauncherIconSize, calcNeededRows, calcGridDropIndex, calcContainerColumns,
-    calcContainerWidth, calcVisibleLauncherCount
+    calcContainerWidth, calcVisibleLauncherCount, calcIconSizeWithFallback, pickCellWidth
 } = require('../helpers');
 
 describe('calcLauncherIconSize', () => {
@@ -361,5 +361,112 @@ describe('calcVisibleLauncherCount', () => {
         // maxCols = floor(202/32) = 6, availCols = 5
         // visible = min(5*2, 20-1) = min(10, 19) = 10
         assert.equal(calcVisibleLauncherCount(20, 2, 30, 2, 200), 10);
+    });
+});
+
+describe('calcIconSizeWithFallback', () => {
+    it('prefers override when > 0 and it fits in the panel', () => {
+        // panel=80 / 2 rows = 40 per row; cap = 40 - 3 = 37; override 32 fits unchanged
+        assert.equal(calcIconSizeWithFallback(80, 24, 2, 32), 32);
+    });
+
+    it('caps override to fit panel height / numberOfRows', () => {
+        // panel=48 / 3 rows = 16 per row; cap = 16 - 3 = 13; override 16 caps to 13
+        // This is the bug we hit on VM (48px panel, override=16, rows=3): 3 rows at
+        // 19px each = 57px overflowing the 48px panel — row 3 got clipped.
+        assert.equal(calcIconSizeWithFallback(48, 24, 3, 16), 13);
+    });
+
+    it('does not cap when override already fits', () => {
+        // panel=60 / 3 rows = 20 per row; cap = 20 - 3 = 17; override 16 is ≤ 17
+        assert.equal(calcIconSizeWithFallback(60, 24, 3, 16), 16);
+    });
+
+    it('uses panelHeight-derived size when override is 0 and panelHeight > 0', () => {
+        // floor(60/2) - 4 = 26; cap = 60/2 - 3 = 27; 26 fits
+        assert.equal(calcIconSizeWithFallback(60, 24, 2, 0), 26);
+    });
+
+    it('falls back to zoneIconSize when panelHeight is 0 (no cap applied)', () => {
+        // cap only applies when panelHeight > 0
+        assert.equal(calcIconSizeWithFallback(0, 24, 2, 0), 24);
+    });
+
+    it('falls back to zoneIconSize when panelHeight is missing', () => {
+        assert.equal(calcIconSizeWithFallback(undefined, 22, 2, 0), 22);
+    });
+
+    it('uses 24 as final fallback when all inputs are zero/missing', () => {
+        assert.equal(calcIconSizeWithFallback(0, 0, 2, 0), 24);
+    });
+
+    it('uses 24 as final fallback when zoneIconSize is negative', () => {
+        assert.equal(calcIconSizeWithFallback(0, -1, 2, 0), 24);
+    });
+
+    it('honors override when panelHeight is 0 (no cap without panel info)', () => {
+        assert.equal(calcIconSizeWithFallback(0, 0, 2, 48), 48);
+    });
+
+    it('still respects 12px minimum from calcLauncherIconSize path', () => {
+        // auto: floor(28/2) - 4 = 10 → clamped to 12; cap = 28/2 - 3 = 11; 12 > 11 → cap to 11
+        // Cap floor is 8, so we never go below 8 even for tiny panels.
+        assert.equal(calcIconSizeWithFallback(28, 16, 2, 0), 11);
+    });
+
+    it('cap never shrinks below the 8px floor', () => {
+        // panel=20 / 4 rows = 5 per row; cap would be 2 but floor is 8
+        assert.equal(calcIconSizeWithFallback(20, 24, 4, 24), 8);
+    });
+
+    it('production config fits on a 60px+ panel', () => {
+        // Prod: override=16, rows=3. On a 60px panel, cap = 17, override 16 fits.
+        assert.equal(calcIconSizeWithFallback(60, 16, 3, 16), 16);
+    });
+
+    it('production config shrinks to fit on a 48px panel', () => {
+        // Same override=16 rows=3 but panel=48 → bug-repro scenario; cap to 13
+        assert.equal(calcIconSizeWithFallback(48, 16, 3, 16), 13);
+    });
+});
+
+describe('pickCellWidth', () => {
+    // Regression: _getCellWidth used to return 0 when natW was below
+    // icon_size + 2, which starved FlowLayout and caused _updateIconSize to
+    // ratchet the icon down to 1px. pickCellWidth must always be positive
+    // when iconSize > 0 — it's better to over-size the container than to
+    // leave it unsized.
+
+    it('returns preferredWidth when it is >= iconSize', () => {
+        // CSS has resolved; natural width (icon + padding) is the correct cell
+        assert.equal(pickCellWidth(16, 32), 32);
+    });
+
+    it('returns iconSize + fallback padding when preferredWidth is below iconSize', () => {
+        // CSS not resolved yet: natW reports the icon's intrinsic size only.
+        // Must NOT return 0 — that would starve FlowLayout.
+        assert.equal(pickCellWidth(16, 3), 20);
+    });
+
+    it('never returns 0 or negative for positive iconSize', () => {
+        // Bug-repro inputs: iconSize=16, natW=3 (observed on VM with override=16).
+        const result = pickCellWidth(16, 3);
+        assert.ok(result > 0, `expected positive, got ${result}`);
+    });
+
+    it('returns 0 only when iconSize is 0 or negative (invalid)', () => {
+        assert.equal(pickCellWidth(0, 100), 0);
+        assert.equal(pickCellWidth(-1, 100), 0);
+    });
+
+    it('treats preferredWidth exactly equal to iconSize as resolved', () => {
+        // natW === iconSize is the edge of "resolved" — use it (padding=0).
+        assert.equal(pickCellWidth(16, 16), 16);
+    });
+
+    it('ignores preferredWidth when below iconSize by any margin', () => {
+        // Even natW=15 (one below iconSize=16) is below the CSS-resolved
+        // threshold and triggers the fallback.
+        assert.equal(pickCellWidth(16, 15), 20);
     });
 });
