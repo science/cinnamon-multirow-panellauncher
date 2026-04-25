@@ -54,6 +54,46 @@ Cinnamon 6.0.4 desktop applet (forked from stock `panel-launchers@cinnamon.org`)
 - Hover/click feedback: `_connectHoverFeedback` applies inline styles via enter/leave/button-press/button-release events on ALL launchers
 - **Icon-size cap** (`calcIconSizeWithFallback`): the user's `icon-size-override` is treated as a preferred maximum and capped by `floor(panelHeight / numberOfRows) - ROW_PADDING_ESTIMATE` so rows always fit within the panel. Without the cap, a 48px panel with override=16 and rows=3 clips the bottom row (19 × 3 = 57 > 48).
 - **Never-starve cell width** (`pickCellWidth`): `_getCellWidth` always returns a positive value when launchers exist — either the launcher's themed preferred width or `icon_size + 4` fallback. Returning 0 caused `_updateContainerWidth` to bail, which starved FlowLayout and triggered `_updateIconSize` to ratchet the icon down to 1px.
+- **Rendered-cols watchdog** (`_verifyLayout`): `Clutter.FlowLayout(homogeneous=true)` sizes its cells from the WIDEST child, but `_getCellWidth()` fast-path samples `_launchers[0]` only. When other launchers are wider (different themed/inline padding), the container is sized for `5*cellW_first` while FlowLayout's actual cell pitch is `cellW_max` — fitting one fewer column. The watchdog walks child Y-allocations to count actually-rendered cols; on `actualCols < expectedCols` it clears inline styles, then re-runs `_updateContainerWidth(true)` which calls `_getCellWidth(true)` to take `max(natW)` across ALL launchers. Bounded by `_colsMismatchRetries` (separate from `_verifyRetries`).
+- **Hover-leak defense** (`_connectHoverFeedback`): inline border on `button-press-event` is cleared on leave/release, but a press without release (drag start, focus loss, modal change) leaves the border stuck — inflating natW by 2px permanently. `notify::mapped` clears style on unmap as defense-in-depth; the cols-mismatch heal path also bulk-clears `set_style('')` on every launcher before re-measuring.
+
+## Diagnosing Layout Regressions (MRPL telemetry)
+
+When the panel renders the wrong column count (e.g., 4 cols instead of 5, with the bottom row clipping below the panel edge), the applet emits state-transition logs to `~/.xsession-errors` with the prefix `MRPL:`. Always-on, fires only on transitions, near-zero steady-state cost.
+
+```bash
+grep MRPL ~/.xsession-errors | tail -50    # full timeline
+grep 'MRPL: cols mismatch' ~/.xsession-errors   # bug detections
+```
+
+**Healthy startup signature** (15 launchers, max-rows=3, override=16, panel=60):
+```
+MRPL: icon_size 0->16 panelH=60 zone=16 rows=3 override=16
+MRPL: split -2->-1 n=15 cellW=20 maxWidth=180 rows=3
+MRPL: containerW 0->108 cellW 0->20 n=15 cols=5 max=first
+MRPL: containerW 108->98 cellW 20->18 n=15 cols=5 max=first   ← _verifyLayout reconverges after CSS resolves
+```
+No `cols mismatch` lines in healthy state.
+
+**Bug detection + auto-heal signature**:
+```
+MRPL: cols mismatch actual=4 expected=5 n=15 rows=3 retries=0
+MRPL: containerW 98->110 cellW 18->20 n=15 cols=5 max=all   ← heal path: max-survey ran
+```
+The `max=all` token confirms the watchdog's max-natW survey across all launchers fixed the disagreement. After the heal, the next `_verifyLayout` should see `actualCols=expectedCols` and reset `_colsMismatchRetries` to 0.
+
+**Watchdog gave up** (deeper bug — share these lines):
+```
+MRPL: cols mismatch actual=4 expected=5 n=15 rows=3 retries=2
+MRPL: cols mismatch retries exhausted; giving up
+```
+This means `_updateContainerWidth(true)` ran but FlowLayout still rendered fewer cols than expected after 3 attempts. Next investigation steps: dump `_launchers[i].actor.get_preferred_width(-1)[1]` for every i to see the natW spread; check if a custom .desktop launcher has anomalous CSS padding; check if the theme is hot-reloading mid-verify.
+
+**Telemetry call sites** (each gated on a `_last*` cache, logs only on transition):
+- `_recalcIconSize` → `MRPL: icon_size OLD->NEW panelH= zone= rows= override=`
+- `_updateContainerWidth(useMaxAcrossAll)` → `MRPL: containerW OLD->NEW cellW OLD->NEW n= cols= max=first|all`
+- `_calcOverflowSplit` (via `_reportSplit`) → `MRPL: split OLD->NEW n= cellW= maxWidth= rows=`
+- `_verifyLayout` → `MRPL: cols mismatch actual= expected= n= rows= retries=` and `MRPL: cols mismatch retries exhausted; giving up`
 
 ## Backup File and yadm Integration
 
