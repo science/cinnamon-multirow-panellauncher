@@ -130,7 +130,7 @@ describe('applet.js safety checks', () => {
                 'must have _updateContainerWidth method'
             );
             const methodMatch = appletSource.match(
-                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_updateContainerWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _updateContainerWidth body');
             const body = methodMatch[1];
@@ -146,7 +146,7 @@ describe('applet.js safety checks', () => {
 
         it('_getCellWidth queries get_preferred_width', () => {
             const methodMatch = appletSource.match(
-                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_getCellWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _getCellWidth body');
             const body = methodMatch[1];
@@ -408,7 +408,7 @@ describe('applet.js safety checks', () => {
         // which always returns a positive value when launchers exist.
         it('_getCellWidth delegates to Helpers.pickCellWidth', () => {
             const methodMatch = appletSource.match(
-                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_getCellWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _getCellWidth body');
             const body = methodMatch[1];
@@ -420,7 +420,7 @@ describe('applet.js safety checks', () => {
 
         it('_getCellWidth does not return 0 when launchers exist', () => {
             const methodMatch = appletSource.match(
-                /_getCellWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_getCellWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch);
             const body = methodMatch[1];
@@ -438,7 +438,7 @@ describe('applet.js safety checks', () => {
 
         it('_updateContainerWidth does not bail for the "CSS unresolved" case', () => {
             const methodMatch = appletSource.match(
-                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_updateContainerWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _updateContainerWidth body');
             const body = methodMatch[1];
@@ -525,7 +525,7 @@ describe('applet.js safety checks', () => {
     describe('width calculation', () => {
         it('_updateContainerWidth uses calcContainerWidth from helpers', () => {
             const methodMatch = appletSource.match(
-                /_updateContainerWidth\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+                /_updateContainerWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
             );
             assert.ok(methodMatch, 'could not find _updateContainerWidth body');
             const body = methodMatch[1];
@@ -758,6 +758,228 @@ describe('applet.js safety checks', () => {
             assert.ok(
                 appletSource.includes('_calcOverflowPanelPosition'),
                 'must have _calcOverflowPanelPosition for positioning on uiGroup'
+            );
+        });
+    });
+
+    describe('rendered-cols watchdog (FlowLayout cellW disagreement)', () => {
+        // FlowLayout(homogeneous=true) sizes cells from the WIDEST child, but
+        // _getCellWidth's fast path samples _launchers[0]. The watchdog must
+        // detect the resulting actual<expected col mismatch and re-size with
+        // cellW = max(natW) across all launchers.
+
+        it('_getCellWidth accepts a useMaxAcrossAll flag', () => {
+            const sigMatch = appletSource.match(
+                /_getCellWidth\s*\(\s*([^)]*)\)\s*\{/
+            );
+            assert.ok(sigMatch, '_getCellWidth signature not found');
+            assert.ok(
+                /useMaxAcrossAll/.test(sigMatch[1]),
+                '_getCellWidth must accept a useMaxAcrossAll parameter for the healing path'
+            );
+        });
+
+        it('_getCellWidth body has a max-survey path that walks all launchers', () => {
+            const methodMatch = appletSource.match(
+                /_getCellWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _getCellWidth body');
+            const body = methodMatch[1];
+            assert.ok(
+                /useMaxAcrossAll/.test(body),
+                '_getCellWidth must reference useMaxAcrossAll in its body'
+            );
+            assert.ok(
+                /for\s*\(\s*let\s+i\s*=\s*1/.test(body) ||
+                /this\._launchers\.length/.test(body),
+                '_getCellWidth must walk additional launchers (i=1..length) under useMaxAcrossAll'
+            );
+        });
+
+        it('_updateContainerWidth forwards useMaxAcrossAll to _getCellWidth', () => {
+            const methodMatch = appletSource.match(
+                /_updateContainerWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /_getCellWidth\(\s*useMaxAcrossAll\s*\)/.test(body),
+                '_updateContainerWidth must pass useMaxAcrossAll through to _getCellWidth'
+            );
+        });
+
+        it('_verifyLayout detects rendered-vs-expected col mismatch', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _verifyLayout body');
+            const body = methodMatch[1];
+            assert.ok(
+                body.includes('calcContainerColumns'),
+                '_verifyLayout must compute expected cols via Helpers.calcContainerColumns'
+            );
+            assert.ok(
+                /get_allocation_box/.test(body),
+                '_verifyLayout must read child allocations to count rendered cols'
+            );
+            assert.ok(
+                /actualCols/.test(body) || /firstY/.test(body),
+                '_verifyLayout must group children by row Y to determine actualCols'
+            );
+        });
+
+        it('_verifyLayout heals via _updateContainerWidth(true) on cols mismatch', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /_updateContainerWidth\(\s*true\s*\)/.test(body),
+                '_verifyLayout must call _updateContainerWidth(true) to opt into the max-survey heal path'
+            );
+        });
+
+        it('_verifyLayout clears inline styles before re-measuring', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /set_style\(\s*['"]\s*['"]\s*\)/.test(body),
+                '_verifyLayout must clear inline styles (defense vs sticky hover/press border) before re-measuring'
+            );
+        });
+
+        it('cols-mismatch retries are bounded and tracked separately from _verifyRetries', () => {
+            assert.ok(
+                /_colsMismatchRetries/.test(appletSource),
+                'must track a _colsMismatchRetries counter separate from _verifyRetries'
+            );
+            // The bound check should appear inside _verifyLayout body.
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /_colsMismatchRetries\s*<\s*3/.test(body) ||
+                /_colsMismatchRetries\s*<=\s*\d/.test(body),
+                '_verifyLayout must bound _colsMismatchRetries to avoid infinite re-scheduling'
+            );
+        });
+    });
+
+    describe('MRPL telemetry (state-transition logging)', () => {
+        // Lightweight always-on telemetry: log only when computed values
+        // transition. Each instrumented function caches its prior value and
+        // emits a single global.log line on change. Tag prefix MRPL: lets
+        // users grep ~/.xsession-errors.
+
+        it('uses the MRPL: log prefix', () => {
+            assert.ok(
+                appletSource.includes("'MRPL:") || appletSource.includes('"MRPL:'),
+                'telemetry must use the MRPL: prefix for greppability'
+            );
+        });
+
+        it('_recalcIconSize logs on icon_size transitions', () => {
+            const methodMatch = appletSource.match(
+                /_recalcIconSize\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /global\.log\(\s*['"]MRPL:/.test(body),
+                '_recalcIconSize must emit MRPL log on transition'
+            );
+            assert.ok(
+                /this\._lastIconSize/.test(body),
+                '_recalcIconSize must cache _lastIconSize so it logs only on change'
+            );
+        });
+
+        it('_updateContainerWidth logs on cellW/containerW transitions', () => {
+            const methodMatch = appletSource.match(
+                /_updateContainerWidth\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /global\.log\(\s*['"]MRPL:/.test(body),
+                '_updateContainerWidth must emit MRPL log on transition'
+            );
+            assert.ok(
+                /this\._lastContainerW/.test(body) || /this\._lastCellW/.test(body),
+                '_updateContainerWidth must cache _last* fields so it logs only on change'
+            );
+        });
+
+        it('_calcOverflowSplit logs on split-decision transitions', () => {
+            assert.ok(
+                /_lastSplitIndex/.test(appletSource),
+                'split-decision telemetry must cache _lastSplitIndex'
+            );
+            // Either inside _calcOverflowSplit directly or via a helper like _reportSplit.
+            assert.ok(
+                /_reportSplit|_lastSplitIndex/.test(appletSource),
+                'split telemetry must be wired (either inline or via _reportSplit helper)'
+            );
+        });
+
+        it('_verifyLayout logs cols mismatch with actual/expected fields', () => {
+            const methodMatch = appletSource.match(
+                /_verifyLayout\s*\(\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch);
+            const body = methodMatch[1];
+            assert.ok(
+                /global\.log\(\s*['"]MRPL:[^'"]*cols\s*mismatch/.test(body) ||
+                /MRPL:\s*cols\s*mismatch/.test(body),
+                '_verifyLayout must log "MRPL: cols mismatch" with actual and expected on detection'
+            );
+        });
+
+        it('telemetry caches are initialized in the constructor', () => {
+            // Each cache must be assigned an initial literal value somewhere
+            // in the file (constructor scope is enforced by convention; the
+            // regex below checks the initialization pattern, not exact placement).
+            assert.ok(
+                /this\._lastCellW\s*=\s*0/.test(appletSource),
+                'must initialize this._lastCellW = 0 (telemetry cache)'
+            );
+            assert.ok(
+                /this\._lastContainerW\s*=\s*0/.test(appletSource),
+                'must initialize this._lastContainerW = 0 (telemetry cache)'
+            );
+            assert.ok(
+                /this\._lastSplitIndex\s*=\s*-?\d/.test(appletSource),
+                'must initialize this._lastSplitIndex (telemetry cache, sentinel)'
+            );
+            assert.ok(
+                /this\._lastIconSize\s*=\s*0/.test(appletSource),
+                'must initialize this._lastIconSize = 0 (telemetry cache)'
+            );
+        });
+    });
+
+    describe('hover-leak defense (notify::mapped)', () => {
+        it('_connectHoverFeedback registers notify::mapped to clear inline style on unmap', () => {
+            const methodMatch = appletSource.match(
+                /_connectHoverFeedback\s*\([^)]*\)\s*\{([\s\S]*?)^\s{4}\}/m
+            );
+            assert.ok(methodMatch, 'could not find _connectHoverFeedback body');
+            const body = methodMatch[1];
+            assert.ok(
+                /notify::mapped/.test(body),
+                '_connectHoverFeedback must connect notify::mapped to clear inline style if actor is unmapped'
+            );
+            // The mapped handler id must be appended to _hoverFeedbackIds so
+            // _disconnectHoverFeedback tears it down.
+            assert.ok(
+                /mappedId/.test(body) && /_hoverFeedbackIds\s*=\s*\[[^\]]*mappedId/.test(body),
+                'mapped handler id must be tracked in _hoverFeedbackIds for cleanup'
             );
         });
     });

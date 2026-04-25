@@ -504,6 +504,13 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._verifySourceId = 0;
         this._healing = false;
         this._verifyRetries = 0;
+        this._colsMismatchRetries = 0; // separate from _verifyRetries
+
+        // Telemetry transition caches (logged on change only).
+        this._lastCellW = 0;
+        this._lastContainerW = 0;
+        this._lastSplitIndex = -2; // sentinel: differs from valid -1
+        this._lastIconSize = 0;
 
         // Overflow popup state (horizontal panels only, when max-width clips launchers)
         this._overflowPanel = null;         // St.Bin on global.stage
@@ -538,9 +545,16 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         // Fall back to the panel zone icon size, which is populated
         // synchronously during panel construction — independent of allocation.
         let zoneSize = this.getPanelIconSize(St.IconType.FULLCOLOR) || 0;
-        this.icon_size = Helpers.calcIconSizeWithFallback(
+        let newSize = Helpers.calcIconSizeWithFallback(
             this._panelHeight, zoneSize, rows, override
         );
+        if (newSize !== this._lastIconSize) {
+            global.log('MRPL: icon_size ' + this._lastIconSize + '->' + newSize +
+                ' panelH=' + this._panelHeight + ' zone=' + zoneSize +
+                ' rows=' + rows + ' override=' + override);
+            this._lastIconSize = newSize;
+        }
+        this.icon_size = newSize;
     }
 
     _onLayoutSettingsChanged() {
@@ -566,7 +580,12 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
     }
 
-    _getCellWidth() {
+    // useMaxAcrossAll: when true, walk every launcher and take the largest
+    // preferredW. FlowLayout(homogeneous=true) sizes its cells from the
+    // widest child, so sampling _launchers[0] alone can undersize the
+    // container and silently force one fewer rendered column. The healing
+    // path (_verifyLayout cols mismatch) opts into this expensive scan.
+    _getCellWidth(useMaxAcrossAll = false) {
         // Always return a positive width when we have launchers — otherwise
         // the container collapses, FlowLayout allocates children at h≈0, and
         // _updateIconSize ratchets the icon_size down to 1px. The watchdog
@@ -574,6 +593,12 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         // fallback gets corrected on the next pass.
         if (this._launchers.length === 0) return 0;
         let [, natW] = this._launchers[0].actor.get_preferred_width(-1);
+        if (useMaxAcrossAll) {
+            for (let i = 1; i < this._launchers.length; i++) {
+                let [, w] = this._launchers[i].actor.get_preferred_width(-1);
+                if (w > natW) natW = w;
+            }
+        }
         return Helpers.pickCellWidth(this.icon_size, natW);
     }
 
@@ -581,7 +606,7 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     // allocates proportionally and FlowLayout has an explicit width
     // for computing row heights (Cinnamon 6.0.4 FlowLayout quirk:
     // without explicit width, children get h=0).
-    _updateContainerWidth() {
+    _updateContainerWidth(useMaxAcrossAll = false) {
         let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
         if (!isHorizontal) return;
 
@@ -592,11 +617,21 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
             return;
         }
 
-        let cellW = this._getCellWidth();
+        let cellW = this._getCellWidth(useMaxAcrossAll);
         if (cellW <= 0) return; // no launchers — leave width untouched
         let spacing = COLUMN_SPACING;
         let maxWidth = this.maxWidth || 0;
         let desiredW = Helpers.calcContainerWidth(count, this.maxRows, cellW, spacing, maxWidth);
+
+        if (desiredW !== this._lastContainerW || cellW !== this._lastCellW) {
+            let cols = Helpers.calcContainerColumns(count, this.maxRows);
+            global.log('MRPL: containerW ' + this._lastContainerW + '->' + desiredW +
+                ' cellW ' + this._lastCellW + '->' + cellW +
+                ' n=' + count + ' cols=' + cols +
+                ' max=' + (useMaxAcrossAll ? 'all' : 'first'));
+            this._lastContainerW = desiredW;
+            this._lastCellW = cellW;
+        }
 
         this.myactor.set_width(desiredW);
         this.myactor.min_width = 0;
@@ -671,6 +706,45 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         this._verifyRetries = 0;
 
         this._updateContainerWidth();
+
+        // Rendered-cols mismatch watchdog: FlowLayout(homogeneous=true) sizes
+        // its cells from the WIDEST child, so a container sized off
+        // _launchers[0]'s preferredW can quietly fit one fewer column than
+        // calcContainerColumns expects. Inspect actual Y-allocations to count
+        // rendered cols; on mismatch, clear sticky inline styles (defense vs
+        // hover-leak) and re-size with cellW = max(natW) across all launchers.
+        // Targets myactor (panel side) only — _overflowGrid uses an explicit
+        // OVERFLOW_GRID_COLS width.
+        let visibleInPanel = this.myactor.get_n_children();
+        if (visibleInPanel >= 2) {
+            let children = this.myactor.get_children();
+            let firstY = Math.round(children[0].get_allocation_box().y1);
+            let actualCols = 0;
+            for (let c of children) {
+                if (Math.round(c.get_allocation_box().y1) === firstY) actualCols++;
+            }
+            let expectedCols = Helpers.calcContainerColumns(visibleInPanel, this.maxRows || 2);
+            if (actualCols > 0 && actualCols < expectedCols) {
+                global.log('MRPL: cols mismatch actual=' + actualCols +
+                    ' expected=' + expectedCols + ' n=' + visibleInPanel +
+                    ' rows=' + this.maxRows + ' retries=' + this._colsMismatchRetries);
+                this._healing = true;
+                try {
+                    for (let l of this._launchers) l.actor.set_style('');
+                    this._updateContainerWidth(true);
+                } finally {
+                    this._healing = false;
+                }
+                if (this._colsMismatchRetries < 3) {
+                    this._colsMismatchRetries += 1;
+                    this._scheduleVerify();
+                } else {
+                    global.log('MRPL: cols mismatch retries exhausted; giving up');
+                }
+            } else {
+                this._colsMismatchRetries = 0;
+            }
+        }
     }
 
     _ensureOverflowUI() {
@@ -940,14 +1014,24 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let isHorizontal = (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM);
         if (!isHorizontal) return -1;
         let maxWidth = this.maxWidth || 0;
-        if (maxWidth <= 0) return -1;
+        if (maxWidth <= 0) return this._reportSplit(-1, 0);
         let cellW = this._getCellWidth();
-        if (cellW <= 0) return -1; // no launchers
+        if (cellW <= 0) return this._reportSplit(-1, 0); // no launchers
         let visible = Helpers.calcVisibleLauncherCount(
             this._launchers.length, this.maxRows, cellW, 2, maxWidth
         );
-        if (visible >= this._launchers.length) return -1; // all fit
-        return visible;
+        if (visible >= this._launchers.length) return this._reportSplit(-1, cellW); // all fit
+        return this._reportSplit(visible, cellW);
+    }
+
+    _reportSplit(splitIndex, cellW) {
+        if (splitIndex !== this._lastSplitIndex) {
+            global.log('MRPL: split ' + this._lastSplitIndex + '->' + splitIndex +
+                ' n=' + this._launchers.length + ' cellW=' + cellW +
+                ' maxWidth=' + (this.maxWidth || 0) + ' rows=' + this.maxRows);
+            this._lastSplitIndex = splitIndex;
+        }
+        return splitIndex;
     }
 
     _connectHoverFeedback(launcher) {
@@ -965,7 +1049,13 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let releaseId = actor.connect('button-release-event', () => {
             actor.set_style('');
         });
-        actor._hoverFeedbackIds = [enterId, leaveId, pressId, releaseId];
+        // Defense vs sticky inline border on press without release (drag start,
+        // focus loss, modal change). A 1px border bumps natW by 2px which can
+        // trip FlowLayout into one fewer column.
+        let mappedId = actor.connect('notify::mapped', () => {
+            if (!actor.mapped) actor.set_style('');
+        });
+        actor._hoverFeedbackIds = [enterId, leaveId, pressId, releaseId, mappedId];
     }
 
     _disconnectHoverFeedback(launcher) {
